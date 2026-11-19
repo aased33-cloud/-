@@ -1,5 +1,5 @@
 const TYPES=['연차','조퇴','외출','병가','출장','공가'];
-const CLOSED='해당 월의 연차 등록이 마감되었습니다. 변경이 필요한 경우 관리자에게 문의하세요.';
+const CLOSED='해당 월의 근태 등록이 마감되었거나 마감일이 설정되지 않았습니다. 관리자에게 문의하세요.';
 function validDate(s){if(!/^\d{4}-\d{2}-\d{2}$/.test(s||''))return false;const d=new Date(s+'T00:00:00Z');return !isNaN(d)&&d.toISOString().slice(0,10)===s;}
 function deadline(month){const [y,m]=month.split('-').map(Number);const d=new Date(Date.UTC(y,m-1,0));d.setUTCDate(d.getUTCDate()-10);return d.toISOString().slice(0,10);}
 function seoulDate(now=new Date()){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);}
