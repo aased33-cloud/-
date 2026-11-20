@@ -34,3 +34,7 @@ ALTER TABLE holiday_preferences ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE monthly_deadlines,holiday_dates,holiday_preferences FROM PUBLIC,anon,authenticated;
 REVOKE ALL ON SEQUENCE holiday_dates_id_seq FROM PUBLIC,anon,authenticated;
 COMMIT;
+
+-- 토요일 자동 생성 및 휴일 제외: 기존 직원·휴일근무 기록은 그대로 보존합니다.
+ALTER TABLE holiday_dates ADD COLUMN IF NOT EXISTS auto_saturday boolean NOT NULL DEFAULT false;
+ALTER TABLE holiday_dates ADD COLUMN IF NOT EXISTS excluded boolean NOT NULL DEFAULT false;
