@@ -90,3 +90,6 @@ ALTER TABLE holiday_preferences ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE monthly_deadlines,holiday_dates,holiday_preferences FROM PUBLIC,anon,authenticated;
 REVOKE ALL ON SEQUENCE holiday_dates_id_seq FROM PUBLIC,anon,authenticated;
 
+
+ALTER TABLE holiday_dates ADD COLUMN IF NOT EXISTS auto_saturday boolean NOT NULL DEFAULT false;
+ALTER TABLE holiday_dates ADD COLUMN IF NOT EXISTS excluded boolean NOT NULL DEFAULT false;
