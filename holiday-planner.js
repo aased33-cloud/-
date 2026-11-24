@@ -55,4 +55,4 @@ function planHolidays({slots,staff,external,externalTarget,locked=[]}){
  run(false);run(true);
  return {assignments:out,shortages:slots.filter(s=>!fixedSlots.has(String(s.id))),externalPeople:fixedExternal.size,conflicts};
 }
-module.exports={planHolidays};
+module.exports={planHolidays,eligibleStaff};

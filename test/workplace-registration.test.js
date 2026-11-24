@@ -113,3 +113,20 @@ test('date replacement rejects another person already working the same date',asy
   const r=await request(app).get('/api/weekly-shift').query(q).expect(200);assert.equal(r.body.overrides.length,0);
  }finally{await db.close()}
 });
+
+test('Dongwoo Friday special time follows the chosen weekly slot and can be changed',async()=>{
+ const {db,app}=await setup();try{
+  await db.exec("INSERT INTO monthly_workplace_assignments(month,employee_id,workplace) VALUES('2026-12-01',1,'동우'),('2026-12-01',2,'앤에프')");
+  const q={month:'2026-12',workplace:'동우',shift:'야간',week_start:'2026-11-29'};
+  await request(app).put('/api/weekly-shift/friday-time').send({...q,slot:1}).expect(409);
+  await request(app).put('/api/weekly-shift').send({...q,slot:1,employee_id:1}).expect(200);
+  await request(app).put('/api/weekly-shift').send({...q,slot:2,employee_id:2}).expect(200);
+  await request(app).put('/api/weekly-shift/friday-time').send({...q,slot:1}).expect(200);
+  let r=await request(app).get('/api/weekly-shift').query(q).expect(200);assert.equal(r.body.friday_slot,1);
+  await request(app).put('/api/weekly-shift').send({...q,slot:1,employee_id:null}).expect(409);
+  await request(app).put('/api/weekly-shift/friday-time').send({...q,slot:2}).expect(200);
+  r=await request(app).get('/api/weekly-shift').query(q).expect(200);assert.equal(r.body.friday_slot,2);
+  await request(app).put('/api/weekly-shift/friday-time').send({...q,slot:null}).expect(200);
+  await request(app).put('/api/weekly-shift').send({...q,slot:1,employee_id:null}).expect(200);
+ }finally{await db.close()}
+});

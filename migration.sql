@@ -123,3 +123,60 @@ CREATE TABLE IF NOT EXISTS weekly_shift_overrides (
 ALTER TABLE weekly_shift_overrides ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE weekly_shift_overrides FROM PUBLIC,anon,authenticated;
 COMMIT;
+
+-- 월별 타 사무소 지원자와 휴일 배치 (기존 근태·직원 데이터는 유지)
+BEGIN;
+CREATE TABLE IF NOT EXISTS holiday_external_people (
+ id bigserial PRIMARY KEY, month date NOT NULL CHECK(EXTRACT(DAY FROM month)=1),
+ name text NOT NULL CHECK(length(name) BETWEEN 1 AND 100), active boolean NOT NULL DEFAULT true,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS holiday_external_availability (
+ external_id bigint NOT NULL REFERENCES holiday_external_people(id) ON DELETE RESTRICT,
+ work_date date NOT NULL, available boolean NOT NULL,
+ PRIMARY KEY(external_id,work_date)
+);
+CREATE TABLE IF NOT EXISTS holiday_plan_settings (
+ month date PRIMARY KEY CHECK(EXTRACT(DAY FROM month)=1), external_target integer NOT NULL DEFAULT 0 CHECK(external_target BETWEEN 0 AND 100)
+);
+CREATE TABLE IF NOT EXISTS holiday_plan_requirements (
+ work_date date NOT NULL, workplace text NOT NULL CHECK(workplace IN ('하림','싱그린','정다운','동우','앤에프','중앙축산')),
+ shift text NOT NULL CHECK(shift IN ('조출','주간','후출','야간')), required integer NOT NULL CHECK(required BETWEEN 0 AND 30),
+ PRIMARY KEY(work_date,workplace,shift)
+);
+CREATE TABLE IF NOT EXISTS holiday_plan_assignments (
+ work_date date NOT NULL, workplace text NOT NULL CHECK(workplace IN ('하림','싱그린','정다운','동우','앤에프','중앙축산')), shift text NOT NULL CHECK(shift IN ('조출','주간','후출','야간')), slot integer NOT NULL CHECK(slot BETWEEN 1 AND 30),
+ employee_id bigint REFERENCES employees(id) ON DELETE RESTRICT,
+ external_id bigint REFERENCES holiday_external_people(id) ON DELETE RESTRICT,
+ locked boolean NOT NULL DEFAULT false,
+ CHECK((employee_id IS NOT NULL)::int+(external_id IS NOT NULL)::int=1), CHECK(external_id IS NULL OR (workplace='하림' AND shift='주간' AND slot>1)),
+ PRIMARY KEY(work_date,workplace,shift,slot), UNIQUE(work_date,employee_id), UNIQUE(work_date,external_id)
+);
+ALTER TABLE holiday_external_people ENABLE ROW LEVEL SECURITY;
+ALTER TABLE holiday_external_availability ENABLE ROW LEVEL SECURITY;
+ALTER TABLE holiday_plan_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE holiday_plan_requirements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE holiday_plan_assignments ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE holiday_external_people,holiday_external_availability,holiday_plan_settings,holiday_plan_requirements,holiday_plan_assignments FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON SEQUENCE holiday_external_people_id_seq FROM PUBLIC,anon,authenticated;
+COMMIT;
+
+-- 동우 금요일 야간 특별 시간: 주별 담당 칸에 연결한다.
+BEGIN;
+CREATE TABLE IF NOT EXISTS dongwoo_friday_time (
+ week_start date PRIMARY KEY, slot smallint NOT NULL CHECK(slot IN (1,2)), updated_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE dongwoo_friday_time ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE dongwoo_friday_time FROM PUBLIC,anon,authenticated;
+COMMIT;
+
+-- 날짜별 타 작업장 지원 (기본 배치를 변경하지 않음)
+BEGIN;
+CREATE TABLE IF NOT EXISTS daily_workplace_support (
+ work_date date NOT NULL, employee_id bigint NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+ workplace text NOT NULL CHECK(workplace IN ('하림','싱그린','정다운','동우','앤에프','중앙축산')),
+ updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(work_date,employee_id)
+);
+ALTER TABLE daily_workplace_support ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE daily_workplace_support FROM PUBLIC,anon,authenticated;
+COMMIT;
