@@ -106,3 +106,20 @@ ALTER TABLE employee_shift_restrictions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE weekly_shift_assignments ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE employee_shift_restrictions,weekly_shift_assignments FROM PUBLIC,anon,authenticated;
 COMMIT;
+
+-- 주별 담당을 유지하면서 특정 날짜만 대체합니다.
+BEGIN;
+CREATE TABLE IF NOT EXISTS weekly_shift_overrides (
+ workplace text NOT NULL,
+ shift text NOT NULL,
+ week_start date NOT NULL,
+ slot smallint NOT NULL,
+ work_date date NOT NULL,
+ employee_id bigint REFERENCES employees(id) ON DELETE RESTRICT,
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(workplace,shift,week_start,slot,work_date),
+ FOREIGN KEY(workplace,shift,week_start,slot) REFERENCES weekly_shift_assignments(workplace,shift,week_start,slot) ON DELETE RESTRICT
+);
+ALTER TABLE weekly_shift_overrides ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE weekly_shift_overrides FROM PUBLIC,anon,authenticated;
+COMMIT;

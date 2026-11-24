@@ -84,3 +84,32 @@ test('night assignment excludes blocked or unavailable employees and permits out
   await request(app).put('/api/weekly-shift').send({...q,slot:1,employee_id:null}).expect(200);
  }finally{await db.close()}
 });
+
+test('date substitutes preserve weekly assignment, prevent duplicates, and count only three or more days',async()=>{
+ const {db,app}=await setup();try{
+  await db.exec("INSERT INTO monthly_workplace_assignments(month,employee_id,workplace) VALUES('2026-12-01',1,'하림'),('2026-12-01',2,'하림')");
+  const q={month:'2026-12',workplace:'하림',shift:'조출',week_start:'2026-11-30'};
+  await request(app).put('/api/weekly-shift').send({...q,slot:1,employee_id:1}).expect(200);
+  await request(app).put('/api/weekly-shift/override').send({...q,slot:1,work_date:'2026-12-01',employee_id:2}).expect(200);
+  let r=await request(app).get('/api/weekly-shift').query(q).expect(200);assert.equal(Number(r.body.assignments[0].employee_id),1);assert.equal(r.body.candidates.find(x=>Number(x.id)===2).current_count,0);
+  await request(app).put('/api/weekly-shift/override').send({...q,slot:1,work_date:'2026-12-02',employee_id:2}).expect(200);
+  await request(app).put('/api/weekly-shift/override').send({...q,slot:1,work_date:'2026-12-03',employee_id:2}).expect(200);
+  r=await request(app).get('/api/weekly-shift').query(q).expect(200);assert.equal(r.body.candidates.find(x=>Number(x.id)===2).current_count,0.5);assert.equal(r.body.candidates.find(x=>Number(x.id)===1).current_count,1);
+  await request(app).put('/api/weekly-shift').send({...q,slot:1,employee_id:null}).expect(409);
+  await db.exec("INSERT INTO attendance(employee_id,type,start_date,end_date,note) VALUES(2,'연차','2026-12-04','2026-12-04','')");
+  await request(app).put('/api/weekly-shift/override').send({...q,slot:1,work_date:'2026-12-04',employee_id:2}).expect(409);
+  await request(app).put('/api/weekly-shift/override').send({...q,slot:1,work_date:'2026-12-01',reset:true,employee_id:null}).expect(200);
+  r=await request(app).get('/api/weekly-shift').query(q).expect(200);assert.equal(r.body.candidates.find(x=>Number(x.id)===2).current_count,0);
+ }finally{await db.close()}
+});
+
+test('date replacement rejects another person already working the same date',async()=>{
+ const {db,app}=await setup();try{
+  await db.exec("INSERT INTO monthly_workplace_assignments(month,employee_id,workplace) VALUES('2026-12-01',1,'하림'),('2026-12-01',2,'하림')");
+  const q={month:'2026-12',workplace:'하림',shift:'야간',week_start:'2026-11-30'};
+  await request(app).put('/api/weekly-shift').send({...q,slot:1,employee_id:1}).expect(200);
+  await request(app).put('/api/weekly-shift').send({...q,slot:2,employee_id:2}).expect(200);
+  await request(app).put('/api/weekly-shift/override').send({...q,slot:1,work_date:'2026-12-01',employee_id:2}).expect(409);
+  const r=await request(app).get('/api/weekly-shift').query(q).expect(200);assert.equal(r.body.overrides.length,0);
+ }finally{await db.close()}
+});
