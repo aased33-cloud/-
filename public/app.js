@@ -65,7 +65,7 @@ function openAuditExport(){
  document.querySelector('#audit-export-form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target),from=f.get('from'),to=f.get('to'),error=document.querySelector('#audit-export-error'),button=e.submitter;
  if(from>to){error.textContent='종료일은 시작일 이후로 선택해 주세요.';return}
  button.disabled=true;error.textContent='';
- try{let rows=[],page=1,total;do{const q=new URLSearchParams({from,to,page:String(page)}),data=await api('/api/audit-v2?'+q);if(!Array.isArray(data.rows)||!Number.isFinite(data.total))throw Error('이력 조회 결과를 확인할 수 없습니다.');rows.push(...data.rows);total=data.total;if(!data.rows.length&&rows.length<total)throw Error('일부 이력을 불러오지 못했습니다. 다시 시도해 주세요.');page++}while(rows.length<total);
+ try{const q=new URLSearchParams({from,to}),data=await api('/api/audit-export?'+q);if(!Array.isArray(data.rows))throw Error('이력 조회 결과를 확인할 수 없습니다.');const rows=data.rows;
  const url=URL.createObjectURL(buildAuditXlsx(rows)),a=document.createElement('a');a.href=url;a.download='변경이력-'+from+'-'+to+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);closeDialog()
  }catch(err){error.textContent=err.message||'다운로드에 실패했습니다.'}finally{button.disabled=false}};
 }
