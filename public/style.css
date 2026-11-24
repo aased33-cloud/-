@@ -35,3 +35,6 @@ body{background:#f5f4fb;color:#24233c;font-size:16px}.top{background:#faf9fe;bor
  .card.table-wrap:has([data-action="role"]) .actions .button{min-height:40px;font-size:13px}
 }
 @media(max-width:360px){.panel .row:has(#summary-employee){grid-template-columns:1fr}.panel .row:has(#summary-employee) #summary-csv{width:100%}}
+
+.employee-search{max-width:340px}
+@media(max-width:760px){.employee-search{max-width:none;margin:12px 0}.employee-search input{min-height:46px}}
