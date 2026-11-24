@@ -84,3 +84,25 @@ ALTER TABLE employee_night_exclusions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE night_unavailable_weeks ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE employee_night_exclusions,night_unavailable_weeks FROM PUBLIC,anon,authenticated;
 COMMIT;
+
+-- 주별 조출·후출·야간의 기본 담당자와 관리자 제한
+BEGIN;
+CREATE TABLE IF NOT EXISTS employee_shift_restrictions (
+ employee_id bigint NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+ restriction text NOT NULL CHECK(restriction IN ('하림조출','동우후출')),
+ PRIMARY KEY(employee_id,restriction)
+);
+CREATE TABLE IF NOT EXISTS weekly_shift_assignments (
+ workplace text NOT NULL CHECK(workplace IN ('하림','동우','싱그린')),
+ shift text NOT NULL CHECK(shift IN ('조출','후출','야간')),
+ week_start date NOT NULL,
+ slot smallint NOT NULL CHECK(slot IN (1,2)),
+ employee_id bigint NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(workplace,shift,week_start,slot),
+ UNIQUE(workplace,shift,week_start,employee_id)
+);
+ALTER TABLE employee_shift_restrictions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE weekly_shift_assignments ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE employee_shift_restrictions,weekly_shift_assignments FROM PUBLIC,anon,authenticated;
+COMMIT;

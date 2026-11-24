@@ -17,7 +17,7 @@ async function setup(){
  const user=(req,res,next)=>{const role=req.get('x-test-role')||'admin';if(role==='anonymous')return res.sendStatus(401);req.user={id:role==='employee'?2:1,role};next()};
  const admin=(req,res,next)=>req.user.role==='admin'?next():res.sendStatus(403);
  const wrap=fn=>(req,res)=>Promise.resolve(fn(req,res)).catch(e=>{console.error(e);res.sendStatus(500)});
- attach(app,pool,user,admin,wrap);return {db,app};
+ attach(app,pool,user,admin,wrap);require('../shift-routes')(app,pool,user,admin,wrap);return {db,app};
 }
 
 test('month assignments copy only empty active employees and preserve older months',async()=>{
@@ -64,5 +64,23 @@ test('night selection uses assigned workplace and shares crossing weeks across m
   await request(app).put('/api/night-registration').set('x-test-role','employee').send({month:'2027-01',confirm:true}).expect(403);
   await request(app).put('/api/night-exclusions/2').send({blocked:false}).expect(200);await db.exec("UPDATE monthly_workplace_assignments SET workplace='앤에프' WHERE month='2027-01-01' AND employee_id=2");
   r=await request(app).get('/api/night-registration?month=2027-01').set('x-test-role','employee').expect(200);assert.equal(r.body.workplace,'동우');assert.equal(r.body.weeks[0].start,'2026-12-27');assert.equal(r.body.weeks[0].end,'2027-01-01');
+ }finally{await db.close()}
+});
+
+test('night assignment excludes blocked or unavailable employees and permits outings',async()=>{
+ const {db,app}=await setup();try{
+  await db.exec("INSERT INTO monthly_workplace_assignments(month,employee_id,workplace) VALUES('2026-12-01',1,'하림'),('2026-12-01',2,'싱그린');INSERT INTO attendance(employee_id,type,start_date,end_date,note) VALUES(2,'외출','2026-12-01','2026-12-01','');");
+  const q={month:'2026-12',workplace:'하림',shift:'야간',week_start:'2026-11-30'};
+  await request(app).get('/api/weekly-shift').set('x-test-role','employee').query(q).expect(403);
+  let r=await request(app).get('/api/weekly-shift').query(q).expect(200);assert.equal(r.body.candidates.find(x=>Number(x.id)===2).reasons.length,0);
+  await request(app).put('/api/weekly-shift').send({...q,slot:1,employee_id:2}).expect(200);
+  await request(app).put('/api/weekly-shift').send({...q,slot:2,employee_id:2}).expect(409);
+  await db.exec("INSERT INTO attendance(employee_id,type,start_date,end_date,note) VALUES(1,'병가','2026-12-01','2026-12-01','');");
+  r=await request(app).get('/api/weekly-shift').query(q).expect(200);assert(r.body.candidates.find(x=>Number(x.id)===1).reasons.includes('해당 주 평일 근태'));
+  await request(app).put('/api/weekly-shift').send({...q,slot:2,employee_id:1}).expect(409);
+  await db.exec("DELETE FROM attendance WHERE employee_id=1;INSERT INTO employee_night_exclusions VALUES(1,true,now())");
+  r=await request(app).get('/api/weekly-shift').query(q).expect(200);assert(r.body.candidates.find(x=>Number(x.id)===1).reasons.includes('관리자 야간 불가'));
+  await request(app).put('/api/weekly-shift').send({...q,slot:2,employee_id:1}).expect(409);
+  await request(app).put('/api/weekly-shift').send({...q,slot:1,employee_id:null}).expect(200);
  }finally{await db.close()}
 });

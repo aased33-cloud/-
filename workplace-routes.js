@@ -26,6 +26,18 @@ module.exports=function attachWorkplaces(app,pool,user,admin,wrap){
   return {workplace,blocked};
  }
  app.get('/api/night-exclusions',user,admin,wrap(async(req,res)=>{const r=await pool.query('SELECT employee_id FROM employee_night_exclusions WHERE blocked=true');res.json(r.rows)}));
+ app.get('/api/shift-restrictions',user,admin,wrap(async(req,res)=>{const r=await pool.query('SELECT employee_id,restriction FROM employee_shift_restrictions');res.json(r.rows)}));
+ app.put('/api/shift-restrictions/:employeeId',user,admin,wrap(async(req,res)=>{
+  const id=Number(req.params.employeeId),restriction=String(req.body.restriction||''),blocked=req.body.blocked;
+  if(!Number.isSafeInteger(id)||id<1||!['하림조출','동우후출'].includes(restriction)||typeof blocked!=='boolean')return res.status(400).json({error:'직원과 설정을 확인하세요.'});
+  const c=await pool.connect();try{await c.query('BEGIN');await c.query('SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))',['shift-restrictions-v1',String(id)]);
+   if(!(await c.query('SELECT id FROM employees WHERE id=$1 AND active=true',[id])).rowCount){await c.query('ROLLBACK');return res.status(400).json({error:'활성 직원을 선택하세요.'})}
+   const old=!!(await c.query('SELECT 1 FROM employee_shift_restrictions WHERE employee_id=$1 AND restriction=$2',[id,restriction])).rowCount;
+   if(blocked)await c.query('INSERT INTO employee_shift_restrictions(employee_id,restriction) VALUES($1,$2) ON CONFLICT DO NOTHING',[id,restriction]);else await c.query('DELETE FROM employee_shift_restrictions WHERE employee_id=$1 AND restriction=$2',[id,restriction]);
+   if(old!==blocked)await c.query('INSERT INTO audit_log(actor_id,action,record_id,before_data,after_data) VALUES($1,$2,$3,$4,$5)',[req.user.id,'근무 제한 변경',id,JSON.stringify({restriction,blocked:old}),JSON.stringify({restriction,blocked})]);
+   await c.query('COMMIT');res.json({ok:true});
+  }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
+ }));
  app.put('/api/night-exclusions/:employeeId',user,admin,wrap(async(req,res)=>{
   const id=Number(req.params.employeeId),blocked=req.body.blocked;if(!Number.isSafeInteger(id)||id<1||typeof blocked!=='boolean')return res.status(400).json({error:'직원과 설정을 확인하세요.'});
   const c=await pool.connect();try{await c.query('BEGIN');await c.query("SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))",['night-exclusions-v1',String(id)]);
