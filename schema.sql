@@ -93,3 +93,23 @@ REVOKE ALL ON SEQUENCE holiday_dates_id_seq FROM PUBLIC,anon,authenticated;
 
 ALTER TABLE holiday_dates ADD COLUMN IF NOT EXISTS auto_saturday boolean NOT NULL DEFAULT false;
 ALTER TABLE holiday_dates ADD COLUMN IF NOT EXISTS excluded boolean NOT NULL DEFAULT false;
+
+-- 월별 기본 작업장 배치 (서버 전용)
+CREATE TABLE IF NOT EXISTS monthly_workplace_assignments (
+ month date NOT NULL CHECK (EXTRACT(DAY FROM month)=1),
+ employee_id bigint NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+ workplace text NOT NULL CHECK (workplace IN ('하림','싱그린','정다운','동우','앤에프','중앙축산')),
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(month,employee_id)
+);
+ALTER TABLE monthly_workplace_assignments ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE monthly_workplace_assignments FROM PUBLIC,anon,authenticated;
+CREATE TABLE IF NOT EXISTS attendance_registration_progress (
+ month date NOT NULL CHECK (EXTRACT(DAY FROM month)=1),
+ employee_id bigint NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+ no_attendance boolean NOT NULL DEFAULT false,
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(month,employee_id)
+);
+ALTER TABLE attendance_registration_progress ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE attendance_registration_progress FROM PUBLIC,anon,authenticated;

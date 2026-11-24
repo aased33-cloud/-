@@ -38,3 +38,29 @@ COMMIT;
 -- 토요일 자동 생성 및 휴일 제외: 기존 직원·휴일근무 기록은 그대로 보존합니다.
 ALTER TABLE holiday_dates ADD COLUMN IF NOT EXISTS auto_saturday boolean NOT NULL DEFAULT false;
 ALTER TABLE holiday_dates ADD COLUMN IF NOT EXISTS excluded boolean NOT NULL DEFAULT false;
+
+-- 월별 기본 작업장 배치: 기존 직원·근태 데이터는 변경하지 않습니다.
+BEGIN;
+CREATE TABLE IF NOT EXISTS monthly_workplace_assignments (
+ month date NOT NULL CHECK (EXTRACT(DAY FROM month)=1),
+ employee_id bigint NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+ workplace text NOT NULL CHECK (workplace IN ('하림','싱그린','정다운','동우','앤에프','중앙축산')),
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(month,employee_id)
+);
+ALTER TABLE monthly_workplace_assignments ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE monthly_workplace_assignments FROM PUBLIC,anon,authenticated;
+COMMIT;
+
+-- 직원의 근태 일정 없음 확인을 월별로 보관합니다.
+BEGIN;
+CREATE TABLE IF NOT EXISTS attendance_registration_progress (
+ month date NOT NULL CHECK (EXTRACT(DAY FROM month)=1),
+ employee_id bigint NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+ no_attendance boolean NOT NULL DEFAULT false,
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(month,employee_id)
+);
+ALTER TABLE attendance_registration_progress ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE attendance_registration_progress FROM PUBLIC,anon,authenticated;
+COMMIT;
