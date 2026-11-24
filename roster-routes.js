@@ -1,5 +1,6 @@
 'use strict';
 const {buildMonthlyRoster,effectiveWeekly}=require('./monthly-roster'),{makeWorkbook}=require('./monthly-workbook'),plan=require('./holiday-plan-routes'),{eligibleStaff}=require('./holiday-planner');
+const shiftRules=require('./shift-rules');
 const WORK=['하림','싱그린','정다운','동우','앤에프','중앙축산'],SHIFTS=['조출','주간','후출','야간'];
 const key=(d,w,s,n)=>[d,w,s,n].join('|');
 async function readRoster(pool,month){
@@ -15,6 +16,13 @@ async function readRoster(pool,month){
   if(day.weekday>=1&&day.weekday<=5){if(state.staff.some(p=>p.base==='하림'))expected.push(['하림','조출',1],['하림','야간',1],['하림','야간',2]);if(state.staff.some(p=>p.base==='동우'))expected.push(['동우','후출',1],['동우','야간',1],['동우','야간',2]);if(state.staff.some(p=>p.base==='싱그린'))expected.push(['싱그린','조출',1],['싱그린','후출',1]);}
   if(day.weekday===0&&state.staff.some(p=>p.base==='동우'))expected.push(['동우','야간',1],['동우','야간',2]);
   const actual=effectiveWeekly(day.date,state.weekly,state.overrides);
+  for(const a of actual){
+   const person=state.staff.find(p=>String(p.id)===String(a.employee_id)),items=state.attendance.filter(x=>String(x.employee_id)===String(a.employee_id));
+   if(a.shift==='야간'){
+    const spec=shiftRules.shiftSpec(a.workplace,a.shift),end=shiftRules.add(a.week_start,spec.days-1);
+    if(!person||!shiftRules.inNightPool(person.base,a.workplace)||state.exclusions.some(x=>String(x.employee_id)===String(a.employee_id))||state.unavailableWeeks.some(x=>String(x.employee_id)===String(a.employee_id)&&x.workplace===a.workplace&&x.week_start===a.week_start)||shiftRules.hasAttendance(items,a.week_start,end,true))warnings.push({type:'야간 담당 근태·불가 주간 확인',date:day.date,workplace:a.workplace,shift:a.shift,slot:a.slot});
+   }else if(items.some(x=>x.start_date<=day.date&&x.end_date>=day.date))warnings.push({type:'주별 담당자의 근태 확인',date:day.date,workplace:a.workplace,shift:a.shift,slot:a.slot});
+  }
   for(const [workplace,shift,slot] of expected)if(!actual.some(a=>a.workplace===workplace&&a.shift===shift&&Number(a.slot)===slot))warnings.push({type:'주별 담당 미배치',date:day.date,workplace,shift,slot});
   if(day.weekday===5){const night=actual.filter(a=>a.workplace==='동우'&&a.shift==='야간');if(night.length&&!night.some(a=>friday.some(f=>f.week_start===a.week_start&&Number(f.slot)===Number(a.slot))))warnings.push({type:'금요일 특별시간 미지정',date:day.date,workplace:'동우',shift:'야간'});}
  }

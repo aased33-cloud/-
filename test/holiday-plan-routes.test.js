@@ -89,3 +89,8 @@ test('admin can check and download the filled workbook without production data',
  const resp=await request(app).get('/api/monthly-roster/export?month=2026-12').buffer(true).parse((res,cb)=>{const parts=[];res.on('data',x=>parts.push(x));res.on('end',()=>cb(null,Buffer.concat(parts)))}).expect(200);
  const ExcelJS=require('exceljs'),book=new ExcelJS.Workbook();await book.xlsx.load(resp.body);assert.equal(book.worksheets.length,2);assert(Array.from({length:11},(_,i)=>book.worksheets[0].getCell('F'+(i+6)).value).includes('관리자(동우)'));assert.equal(book.worksheets[1].getCell('G5').value,'관리자');assert.equal(book.worksheets[0].getCell('J6').value,'관리자');
  }finally{await db.close()}});
+test('roster check warns when attendance is added after weekly night assignment',async()=>{const {db,app}=await setup();try{
+ const weekly={month:'2026-12',workplace:'하림',shift:'야간',week_start:'2026-11-30',slot:1,employee_id:1};await request(app).put('/api/weekly-shift').send(weekly).expect(200);
+ await db.exec("INSERT INTO attendance(employee_id,type,start_date,end_date,note) VALUES(1,'병가','2026-12-01','2026-12-01','')");
+ const r=await request(app).get('/api/monthly-roster/check?month=2026-12').expect(200);assert(r.body.warnings.some(w=>w.date==='2026-12-01'&&w.type==='야간 담당 근태·불가 주간 확인'));
+ }finally{await db.close()}});
