@@ -64,3 +64,23 @@ CREATE TABLE IF NOT EXISTS attendance_registration_progress (
 ALTER TABLE attendance_registration_progress ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE attendance_registration_progress FROM PUBLIC,anon,authenticated;
 COMMIT;
+
+-- 야간 배제 설정과 작업장별 주간 선택. 월 경계를 넘는 주는 시작일로 공유합니다.
+BEGIN;
+CREATE TABLE IF NOT EXISTS employee_night_exclusions (
+ employee_id bigint PRIMARY KEY REFERENCES employees(id) ON DELETE RESTRICT,
+ blocked boolean NOT NULL DEFAULT true,
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS night_unavailable_weeks (
+ employee_id bigint NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+ workplace text NOT NULL CHECK(workplace IN ('하림','동우')),
+ week_start date NOT NULL,
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(employee_id,workplace,week_start)
+);
+ALTER TABLE attendance_registration_progress ADD COLUMN IF NOT EXISTS night_confirmed boolean NOT NULL DEFAULT false;
+ALTER TABLE employee_night_exclusions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE night_unavailable_weeks ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE employee_night_exclusions,night_unavailable_weeks FROM PUBLIC,anon,authenticated;
+COMMIT;

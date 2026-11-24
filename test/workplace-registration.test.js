@@ -48,3 +48,21 @@ test('employee can confirm no attendance only inside the registration window and
   r=await request(app).get('/api/registration-attendance').set('x-test-role','employee').query({month}).expect(200);assert.equal(r.body.no_attendance,false);assert.equal(r.body.items.length,1);
  }finally{await db.close()}
 });
+
+test('night selection uses assigned workplace and shares crossing weeks across months',async()=>{
+ const {db,app}=await setup();try{
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  await db.query("INSERT INTO monthly_deadlines(kind,month,start_date,deadline_date) VALUES('attendance','2026-12-01',$1::date,$1::date),('attendance','2027-01-01',$1::date,$1::date)",[today]);
+  await db.exec("INSERT INTO monthly_workplace_assignments(month,employee_id,workplace) VALUES('2026-12-01',2,'하림'),('2027-01-01',2,'하림')");
+  let r=await request(app).get('/api/night-registration?month=2027-01').set('x-test-role','employee').expect(200);assert.equal(r.body.workplace,'하림');assert.deepEqual(r.body.weeks[0],{start:'2026-12-28',end:'2027-01-02',unavailable:false});
+  await request(app).put('/api/night-registration').set('x-test-role','employee').send({month:'2027-01',week_start:'2026-12-28',unavailable:true}).expect(200);
+  r=await request(app).get('/api/night-registration?month=2026-12').set('x-test-role','employee').expect(200);assert.equal(r.body.weeks.find(w=>w.start==='2026-12-28').unavailable,true);
+  await request(app).put('/api/night-registration').set('x-test-role','employee').send({month:'2027-01',confirm:true}).expect(200);r=await request(app).get('/api/night-registration?month=2027-01').set('x-test-role','employee').expect(200);assert.equal(r.body.confirmed,true);
+  await request(app).put('/api/night-registration').set('x-test-role','employee').send({month:'2027-01',week_start:'2026-11-01',unavailable:true}).expect(400);
+  await request(app).put('/api/night-exclusions/2').set('x-test-role','employee').send({blocked:true}).expect(403);
+  await request(app).put('/api/night-exclusions/2').send({blocked:true}).expect(200);r=await request(app).get('/api/night-registration?month=2027-01').set('x-test-role','employee').expect(200);assert.equal(r.body.blocked,true);assert.deepEqual(r.body.weeks,[]);
+  await request(app).put('/api/night-registration').set('x-test-role','employee').send({month:'2027-01',confirm:true}).expect(403);
+  await request(app).put('/api/night-exclusions/2').send({blocked:false}).expect(200);await db.exec("UPDATE monthly_workplace_assignments SET workplace='앤에프' WHERE month='2027-01-01' AND employee_id=2");
+  r=await request(app).get('/api/night-registration?month=2027-01').set('x-test-role','employee').expect(200);assert.equal(r.body.workplace,'동우');assert.equal(r.body.weeks[0].start,'2026-12-27');assert.equal(r.body.weeks[0].end,'2027-01-01');
+ }finally{await db.close()}
+});
