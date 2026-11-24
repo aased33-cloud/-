@@ -21,6 +21,34 @@ module.exports=function attachExtra(app,pool,user,admin,wrap){
  app.delete('/api/holiday-preferences/:holidayId',user,wrap(async(req,res)=>{const id=Number(req.params.holidayId),eid=req.user.role==='admin'&&req.query.employee_id?Number(req.query.employee_id):Number(req.user.id);const c=await pool.connect();try{await c.query('BEGIN');const h=(await c.query('SELECT holiday_date::text AS d FROM holiday_dates WHERE excluded=false AND id=$1',[id])).rows[0];if(!h){await c.query('ROLLBACK');return res.status(404).json({error:'휴일이 없습니다.'})}if(req.user.role!=='admin'){await lockPeriods(c,periodKeys('holiday',h.d));}if(req.user.role!=='admin'&&await isClosed(c,'holiday',h.d.slice(0,7))){await c.query('ROLLBACK');return res.status(403).json({error:'등록이 마감되었습니다.'})}const old=(await c.query('DELETE FROM holiday_preferences WHERE holiday_id=$1 AND employee_id=$2 RETURNING status,night_status,note',[id,eid])).rows[0];if(old)await audit(c,req.user.id,'휴일근무 삭제',id,{employee_id:eid,holiday_date:h.d,...old},null);await c.query('COMMIT');res.json({ok:true})}catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}}));
  app.get('/api/employee-summary',user,wrap(async(req,res)=>{const m=monthParam(req,res);if(!m)return;const eid=req.user.role==='admin'?Number(req.query.employee_id||0):req.user.id;if(req.user.role==='admin'&&eid&&!Number.isSafeInteger(eid))return res.status(400).json({error:'직원 선택을 확인하세요.'});const att=await pool.query(`SELECT a.id,a.employee_id,e.name,e.employee_no,a.type,a.start_date::text AS start_date,a.end_date::text AS end_date,to_char(a.start_time,'HH24:MI') AS start_time,to_char(a.end_time,'HH24:MI') AS end_time,a.note FROM attendance a JOIN employees e ON e.id=a.employee_id WHERE a.start_date < ($1::date+interval '1 month') AND a.end_date >= $1::date AND ($2::bigint IS NULL OR a.employee_id=$2) ORDER BY e.name,a.start_date`,[m+'-01',req.user.role==='admin'?(eid||null):req.user.id]);const prefs=await pool.query(`SELECT p.employee_id,e.name,e.employee_no,h.holiday_date::text AS holiday_date,p.status,p.night_status FROM holiday_preferences p JOIN employees e ON e.id=p.employee_id JOIN holiday_dates h ON h.id=p.holiday_id WHERE h.excluded=false AND h.holiday_date >= $1::date AND h.holiday_date < ($1::date+interval '1 month') AND ($2::bigint IS NULL OR p.employee_id=$2) ORDER BY e.name,h.holiday_date`,[m+'-01',req.user.role==='admin'?(eid||null):req.user.id]);res.json({attendance:att.rows,holiday:prefs.rows})}));
  app.get('/api/audit-v2',user,admin,wrap(async(req,res)=>{const page=Math.max(1,Math.min(100000,Number(req.query.page)||1)),limit=50;const terms=[],params=[];if(req.query.action){params.push(String(req.query.action));terms.push(`a.action=$${params.length}`)}if(req.query.actor_id){const n=Number(req.query.actor_id);if(!Number.isSafeInteger(n)||n<1)return res.status(400).json({error:'직원을 확인하세요.'});params.push(n);terms.push(`a.actor_id=$${params.length}`)}if(req.query.from){if(!validDate(req.query.from))return res.status(400).json({error:'시작일을 확인하세요.'});params.push(req.query.from);terms.push(`a.created_at >= ($${params.length}::date::timestamp AT TIME ZONE 'Asia/Seoul')`)}if(req.query.to){if(!validDate(req.query.to))return res.status(400).json({error:'종료일을 확인하세요.'});params.push(req.query.to);terms.push(`a.created_at < (($${params.length}::date + interval '1 day') AT TIME ZONE 'Asia/Seoul')`)}const where=terms.length?'WHERE '+terms.join(' AND '):'';const total=(await pool.query(`SELECT count(*)::int AS n FROM audit_log a ${where}`,params)).rows[0].n;const rows=(await pool.query(`SELECT a.id,a.action,a.record_id,a.before_data,a.after_data,a.created_at,e.name AS actor_name FROM audit_log a JOIN employees e ON e.id=a.actor_id ${where} ORDER BY a.created_at DESC,a.id DESC LIMIT ${limit} OFFSET $${params.length+1}`,[...params,(page-1)*limit])).rows;res.json({rows,total,page,pageSize:limit})}));
+ // The admin-only warning uses the same cluster database-size measure that
+ // Supabase documents for its database usage report. No row data is returned.
+ app.get('/api/database-usage',user,admin,wrap(async(req,res)=>{
+  const result=await pool.query('SELECT sum(pg_database_size(datname))::bigint AS bytes FROM pg_database');
+  if(result.rows[0]?.bytes==null)throw Error('Database size unavailable');
+  const bytes=Number(result.rows[0].bytes);
+  if(!Number.isSafeInteger(bytes)||bytes<0)throw Error('Database size unavailable');
+  res.set('Cache-Control','no-store');
+  res.json({bytes});
+ }));
+ // Manual only: the admin explicitly confirms deletion of audit history older
+ // than six months. Attendance, employees and settings are never targeted.
+ app.get('/api/audit-cleanup-preview',user,admin,wrap(async(req,res)=>{
+  const {rows}=await pool.query("SELECT count(*)::int AS count FROM audit_log WHERE created_at < now() - interval '6 months'");
+  res.set('Cache-Control','no-store');
+  res.json({count:rows[0].count});
+ }));
+ app.post('/api/audit-cleanup',user,admin,wrap(async(req,res)=>{
+  if(req.body?.confirm!==true)return res.status(400).json({error:'삭제 확인이 필요합니다.'});
+  const c=await pool.connect();
+  try{
+   await c.query('BEGIN');
+   const {rowCount}=await c.query("DELETE FROM audit_log WHERE created_at < now() - interval '6 months'");
+   await c.query('INSERT INTO audit_log(actor_id,action,after_data) VALUES($1,$2,$3)',[req.user.id,'변경 이력 수동 정리',JSON.stringify({deleted_count:rowCount,retention:'6 months'})]);
+   await c.query('COMMIT');
+   res.set('Cache-Control','no-store');res.json({deleted:rowCount});
+  }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
+ }));
  // A single SELECT gives the export one PostgreSQL statement snapshot, even if
  // new audit entries are written while the browser builds the spreadsheet.
  app.get('/api/audit-export',user,admin,wrap(async(req,res)=>{

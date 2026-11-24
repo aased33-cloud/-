@@ -38,3 +38,7 @@ body{background:#f5f4fb;color:#24233c;font-size:16px}.top{background:#faf9fe;bor
 
 .employee-search{max-width:340px}
 @media(max-width:760px){.employee-search{max-width:none;margin:12px 0}.employee-search input{min-height:46px}}
+
+.database-usage-warning{padding:12px 14px;margin-bottom:16px;border:1px solid #e7ca88;border-radius:9px;background:#fff8e8;color:#69420e;line-height:1.5;overflow-wrap:anywhere}
+
+#audit-export-form .modal-actions{flex-wrap:wrap}
