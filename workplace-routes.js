@@ -107,16 +107,36 @@ module.exports=function attachWorkplaces(app,pool,user,admin,wrap){
   const month=validateMonth(req,res);if(!month)return;
   const id=Number(req.params.employeeId),workplace=req.body.workplace;
   if(!Number.isSafeInteger(id)||id<1||!(workplace===null||WORKPLACES.includes(workplace)))return res.status(400).json({error:'직원과 작업장을 확인하세요.'});
+  const expected=req.body.expected_workplace;
+  if(expected!==undefined&&expected!==null&&!WORKPLACES.includes(expected))return res.status(400).json({error:'기존 작업장을 확인하세요.'});
   const c=await pool.connect();try{
    await c.query('BEGIN');await lock(c,month);
    const employee=await c.query('SELECT id,active FROM employees WHERE id=$1',[id]);
    if(!employee.rowCount||!employee.rows[0].active){await c.query('ROLLBACK');return res.status(400).json({error:'활성 직원을 선택하세요.'})}
    const old=(await c.query('SELECT workplace FROM monthly_workplace_assignments WHERE month=$1::date AND employee_id=$2',[month+'-01',id])).rows[0]?.workplace||null;
+   if(expected!==undefined&&old!==expected){await c.query('ROLLBACK');return res.status(409).json({error:'다른 관리자가 배치를 변경했습니다. 화면을 새로고침해 주세요.'})}
    if(old===workplace){await c.query('COMMIT');return res.json({ok:true,unchanged:true})}
    if(workplace===null)await c.query('DELETE FROM monthly_workplace_assignments WHERE month=$1::date AND employee_id=$2',[month+'-01',id]);
    else await c.query('INSERT INTO monthly_workplace_assignments(month,employee_id,workplace) VALUES($1::date,$2,$3) ON CONFLICT(month,employee_id) DO UPDATE SET workplace=EXCLUDED.workplace,updated_at=now()',[month+'-01',id,workplace]);
    await c.query('INSERT INTO audit_log(actor_id,action,record_id,before_data,after_data) VALUES($1,$2,$3,$4,$5)',[req.user.id,'작업장 기본 배치 변경',id,JSON.stringify({month,employee_id:id,workplace:old}),JSON.stringify({month,employee_id:id,workplace})]);
    await c.query('COMMIT');res.json({ok:true});
+  }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
+ }));
+ app.post('/api/workplaces/bulk',user,admin,wrap(async(req,res)=>{
+  const month=validateMonth(req,res);if(!month)return;
+  const workplace=req.body.workplace,raw=req.body.employee_ids;
+  if(!WORKPLACES.includes(workplace)||!Array.isArray(raw)||raw.length<1||raw.length>1000)return res.status(400).json({error:'직원과 작업장을 선택하세요.'});
+  const ids=raw.map(Number);
+  if(ids.some(id=>!Number.isSafeInteger(id)||id<1)||new Set(ids).size!==ids.length)return res.status(400).json({error:'직원 목록을 확인하세요.'});
+  const c=await pool.connect();try{
+   await c.query('BEGIN');await lock(c,month);
+   const people=await c.query('SELECT id FROM employees WHERE active=true AND id=ANY($1::bigint[])',[ids]);
+   if(people.rows.length!==ids.length){await c.query('ROLLBACK');return res.status(400).json({error:'활성 직원만 선택할 수 있습니다. 화면을 새로고침해 주세요.'})}
+   const existing=await c.query('SELECT employee_id FROM monthly_workplace_assignments WHERE month=$1::date AND employee_id=ANY($2::bigint[])',[month+'-01',ids]);
+   if(existing.rows.length){await c.query('ROLLBACK');return res.status(409).json({error:'이미 배치된 직원이 있습니다. 목록을 새로고침한 뒤 미배치 직원만 선택해 주세요.'})}
+   const result=await c.query('INSERT INTO monthly_workplace_assignments(month,employee_id,workplace) SELECT $1::date,e.id,$3 FROM employees e WHERE e.id=ANY($2::bigint[]) RETURNING employee_id,workplace',[month+'-01',ids,workplace]);
+   await c.query('INSERT INTO audit_log(actor_id,action,after_data) VALUES($1,$2,$3)',[req.user.id,'작업장 일괄 배치',JSON.stringify({month,workplace,employee_ids:ids})]);
+   await c.query('COMMIT');res.json({ok:true,assigned:result.rows.length});
   }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
  }));
  app.post('/api/workplaces/copy-previous',user,admin,wrap(async(req,res)=>{

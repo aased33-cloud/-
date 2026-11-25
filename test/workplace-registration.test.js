@@ -130,3 +130,21 @@ test('Dongwoo Friday special time follows the chosen weekly slot and can be chan
   await request(app).put('/api/weekly-shift').send({...q,slot:1,employee_id:null}).expect(200);
  }finally{await db.close()}
 });
+
+test('bulk workplace assignment is atomic, rejects already assigned employees and preserves other months',async()=>{
+ const {db,app}=await setup();try{
+  await db.exec("INSERT INTO employees VALUES(4,'직원2','A004',true); INSERT INTO monthly_workplace_assignments(month,employee_id,workplace) VALUES('2026-11-01',1,'동우')");
+  await request(app).post('/api/workplaces/bulk').set('x-test-role','employee').send({month:'2026-12',workplace:'하림',employee_ids:[1,2]}).expect(403);
+  await request(app).post('/api/workplaces/bulk').send({month:'2026-12',workplace:'하림',employee_ids:[1,1]}).expect(400);
+  await request(app).post('/api/workplaces/bulk').send({month:'2026-12',workplace:'하림',employee_ids:[1,3]}).expect(400);
+  let r=await request(app).post('/api/workplaces/bulk').send({month:'2026-12',workplace:'하림',employee_ids:[1,2]}).expect(200);assert.equal(r.body.assigned,2);
+  await request(app).post('/api/workplaces/bulk').send({month:'2026-12',workplace:'동우',employee_ids:[2,4]}).expect(409);
+  r=await request(app).get('/api/workplaces?month=2026-12').expect(200);assert.equal(r.body.assignments.length,2);assert(r.body.assignments.every(x=>x.workplace==='하림'));assert(!r.body.assignments.some(x=>Number(x.employee_id)===4));
+  r=await request(app).get('/api/workplaces?month=2026-11').expect(200);assert.equal(r.body.assignments[0].workplace,'동우');
+  await request(app).put('/api/workplaces/2').send({month:'2026-12',workplace:null,expected_workplace:'동우'}).expect(409);
+  await request(app).put('/api/workplaces/2').send({month:'2026-12',workplace:null,expected_workplace:'하림'}).expect(200);
+  await request(app).post('/api/workplaces/bulk').send({month:'2026-12',workplace:'동우',employee_ids:[2,4]}).expect(200);
+  r=await request(app).get('/api/workplaces?month=2026-12').expect(200);assert.equal(r.body.assignments.find(x=>Number(x.employee_id)===2).workplace,'동우');assert.equal(r.body.assignments.length,3);
+  const audit=await db.query("SELECT count(*)::int AS n FROM audit_log WHERE action='작업장 일괄 배치'");assert.equal(audit.rows[0].n,2);
+ }finally{await db.close()}
+});
