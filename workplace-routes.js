@@ -25,6 +25,15 @@ module.exports=function attachWorkplaces(app,pool,user,admin,wrap){
   const workplace=a?.workplace?(a.workplace==='동우'||a.workplace==='앤에프'?'동우':'하림'):null;
   return {workplace,blocked};
  }
+ const targetEmployee=async(req,res)=>{
+  const raw=req.method==='GET'?req.query.employee_id:req.body?.employee_id;
+  if(raw===undefined||raw===null||raw==='')return req.user.id;
+  const id=Number(raw);
+  if(!Number.isSafeInteger(id)||id<1){res.status(400).json({error:'직원을 확인하세요.'});return null}
+  if(req.user.role!=='admin'&&id!==Number(req.user.id)){res.status(403).json({error:'본인 정보만 조회하거나 수정할 수 있습니다.'});return null}
+  if(!(await pool.query('SELECT id FROM employees WHERE id=$1 AND active=true',[id])).rowCount){res.status(400).json({error:'활성 직원을 선택하세요.'});return null}
+  return id;
+ };
  app.get('/api/night-exclusions',user,admin,wrap(async(req,res)=>{const r=await pool.query('SELECT employee_id FROM employee_night_exclusions WHERE blocked=true');res.json(r.rows)}));
  app.get('/api/shift-restrictions',user,admin,wrap(async(req,res)=>{const r=await pool.query('SELECT employee_id,restriction FROM employee_shift_restrictions');res.json(r.rows)}));
  app.put('/api/shift-restrictions/:employeeId',user,admin,wrap(async(req,res)=>{
@@ -48,30 +57,31 @@ module.exports=function attachWorkplaces(app,pool,user,admin,wrap){
   }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
  }));
  app.get('/api/night-registration',user,wrap(async(req,res)=>{
-  const month=validateMonth(req,res);if(!month)return;const context=await nightContext(pool,req.user.id,month);
+  const month=validateMonth(req,res);if(!month)return;const employeeId=await targetEmployee(req,res);if(employeeId===null)return;const context=await nightContext(pool,employeeId,month);
   if(!context.workplace||context.blocked)return res.json({month,...context,weeks:[],confirmed:false});
-  const windows=nightWeeks(month,context.workplace),keys=windows.map(w=>w.start),selected=(await pool.query('SELECT week_start::text AS week_start FROM night_unavailable_weeks WHERE employee_id=$1 AND workplace=$2 AND week_start=ANY($3::date[])',[req.user.id,context.workplace,keys])).rows;
-  const confirmed=(await pool.query('SELECT night_confirmed FROM attendance_registration_progress WHERE month=$1::date AND employee_id=$2',[month+'-01',req.user.id])).rows[0]?.night_confirmed||false;
+  const windows=nightWeeks(month,context.workplace),keys=windows.map(w=>w.start),selected=(await pool.query('SELECT week_start::text AS week_start FROM night_unavailable_weeks WHERE employee_id=$1 AND workplace=$2 AND week_start=ANY($3::date[])',[employeeId,context.workplace,keys])).rows;
+  const confirmed=(await pool.query('SELECT night_confirmed FROM attendance_registration_progress WHERE month=$1::date AND employee_id=$2',[month+'-01',employeeId])).rows[0]?.night_confirmed||false;
   res.json({month,...context,confirmed,weeks:windows.map(w=>({...w,unavailable:selected.some(x=>x.week_start===w.start)}))});
  }));
  app.put('/api/night-registration',user,wrap(async(req,res)=>{
-  const month=validateMonth(req,res);if(!month)return;const week=String(req.body.week_start||''),unavailable=req.body.unavailable,confirm=req.body.confirm===true;
+  const month=validateMonth(req,res);if(!month)return;const employeeId=await targetEmployee(req,res);if(employeeId===null)return;const week=String(req.body.week_start||''),unavailable=req.body.unavailable,confirm=req.body.confirm===true;
   if(!confirm&&(typeof unavailable!=='boolean'||!validDate(week)))return res.status(400).json({error:'야간 불가능 주간을 확인하세요.'});
   const weekEnd=confirm?null:new Date(Date.parse(week+'T00:00:00Z')+5*86400000).toISOString().slice(0,10);
   const affectedMonths=confirm?[month]:months(week,weekEnd);
   const c=await pool.connect();try{await c.query('BEGIN');await lockPeriods(c,[`attendance:${month}`,...affectedMonths.map(m=>`attendance:${m}`)]);
    if(!await registrationOpen(c,req,month)){await c.query('ROLLBACK');return res.status(403).json({error:'근태 등록 기간이 아닙니다.'})}
-   const ctx=await nightContext(c,req.user.id,month);if(!ctx.workplace||ctx.blocked){await c.query('ROLLBACK');return res.status(403).json({error:'야간 등록 대상이 아닙니다.'})}
+   const ctx=await nightContext(c,employeeId,month);if(!ctx.workplace||ctx.blocked){await c.query('ROLLBACK');return res.status(403).json({error:'야간 등록 대상이 아닙니다.'})}
    if(!confirm){if(!nightWeeks(month,ctx.workplace).some(w=>w.start===week)){await c.query('ROLLBACK');return res.status(400).json({error:'주간 날짜를 확인하세요.'})}
-    const previous=!!(await c.query('SELECT 1 FROM night_unavailable_weeks WHERE employee_id=$1 AND workplace=$2 AND week_start=$3::date',[req.user.id,ctx.workplace,week])).rowCount;
-    if(unavailable)await c.query('INSERT INTO night_unavailable_weeks(employee_id,workplace,week_start) VALUES($1,$2,$3::date) ON CONFLICT DO NOTHING',[req.user.id,ctx.workplace,week]);
-    else await c.query('DELETE FROM night_unavailable_weeks WHERE employee_id=$1 AND workplace=$2 AND week_start=$3::date',[req.user.id,ctx.workplace,week]);
+    const previous=!!(await c.query('SELECT 1 FROM night_unavailable_weeks WHERE employee_id=$1 AND workplace=$2 AND week_start=$3::date',[employeeId,ctx.workplace,week])).rowCount;
+    if(unavailable)await c.query('INSERT INTO night_unavailable_weeks(employee_id,workplace,week_start) VALUES($1,$2,$3::date) ON CONFLICT DO NOTHING',[employeeId,ctx.workplace,week]);
+    else await c.query('DELETE FROM night_unavailable_weeks WHERE employee_id=$1 AND workplace=$2 AND week_start=$3::date',[employeeId,ctx.workplace,week]);
     if(previous!==unavailable){
-     await c.query('UPDATE attendance_registration_progress SET night_confirmed=false,updated_at=now() WHERE employee_id=$1 AND month=ANY($2::date[])',[req.user.id,affectedMonths.map(m=>m+'-01')]);
-     await c.query('INSERT INTO audit_log(actor_id,action,before_data,after_data) VALUES($1,$2,$3,$4)',[req.user.id,'야간 불가능 주간 변경',JSON.stringify({workplace:ctx.workplace,week_start:week,unavailable:previous}),JSON.stringify({workplace:ctx.workplace,week_start:week,unavailable})]);
+     await c.query('UPDATE attendance_registration_progress SET night_confirmed=false,updated_at=now() WHERE employee_id=$1 AND month=ANY($2::date[])',[employeeId,affectedMonths.map(m=>m+'-01')]);
+     await c.query('INSERT INTO audit_log(actor_id,action,before_data,after_data) VALUES($1,$2,$3,$4)',[req.user.id,'야간 불가능 주간 변경',JSON.stringify({employee_id:employeeId,workplace:ctx.workplace,week_start:week,unavailable:previous}),JSON.stringify({employee_id:employeeId,workplace:ctx.workplace,week_start:week,unavailable})]);
     }
    }
-   await c.query('INSERT INTO attendance_registration_progress(month,employee_id,night_confirmed) VALUES($1::date,$2,$3) ON CONFLICT(month,employee_id) DO UPDATE SET night_confirmed=EXCLUDED.night_confirmed,updated_at=now()',[month+'-01',req.user.id,confirm]);
+   await c.query('INSERT INTO attendance_registration_progress(month,employee_id,night_confirmed) VALUES($1::date,$2,$3) ON CONFLICT(month,employee_id) DO UPDATE SET night_confirmed=EXCLUDED.night_confirmed,updated_at=now()',[month+'-01',employeeId,confirm]);
+   if(confirm&&Number(employeeId)!==Number(req.user.id))await c.query('INSERT INTO audit_log(actor_id,action,record_id,after_data) VALUES($1,$2,$3,$4)',[req.user.id,'야간 주간 확인',employeeId,JSON.stringify({month,employee_id:employeeId})]);
    await c.query('COMMIT');res.json({ok:true});
   }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
  }));
@@ -80,26 +90,27 @@ module.exports=function attachWorkplaces(app,pool,user,admin,wrap){
   const {rows}=await pool.query(`SELECT a.employee_id,a.workplace,e.name,e.employee_no,e.active FROM monthly_workplace_assignments a JOIN employees e ON e.id=a.employee_id WHERE a.month=$1::date ORDER BY e.name,e.employee_no`,[month+'-01']);res.json({month,assignments:rows});
  }));
  app.get('/api/my-workplace',user,wrap(async(req,res)=>{
-  const month=validateMonth(req,res);if(!month)return;
-  const {rows}=await pool.query('SELECT workplace FROM monthly_workplace_assignments WHERE month=$1::date AND employee_id=$2',[month+'-01',req.user.id]);res.json({month,workplace:rows[0]?.workplace||null});
+  const month=validateMonth(req,res);if(!month)return;const employeeId=await targetEmployee(req,res);if(employeeId===null)return;
+  const {rows}=await pool.query('SELECT workplace FROM monthly_workplace_assignments WHERE month=$1::date AND employee_id=$2',[month+'-01',employeeId]);res.json({month,workplace:rows[0]?.workplace||null});
  }));
  app.get('/api/registration-attendance',user,wrap(async(req,res)=>{
-  const month=validateMonth(req,res);if(!month)return;
-  const r=await pool.query(`SELECT a.id,a.type,to_char(a.start_date,'YYYY-MM-DD') AS start_date,to_char(a.end_date,'YYYY-MM-DD') AS end_date,to_char(a.start_time,'HH24:MI') AS start_time,to_char(a.end_time,'HH24:MI') AS end_time,a.note FROM attendance a WHERE a.employee_id=$1 AND a.start_date < ($2::date+interval '1 month') AND a.end_date >= $2::date ORDER BY a.start_date,a.id`,[req.user.id,month+'-01']);
-  const progress=await pool.query('SELECT no_attendance FROM attendance_registration_progress WHERE employee_id=$1 AND month=$2::date',[req.user.id,month+'-01']);
+  const month=validateMonth(req,res);if(!month)return;const employeeId=await targetEmployee(req,res);if(employeeId===null)return;
+  const r=await pool.query(`SELECT a.id,a.type,to_char(a.start_date,'YYYY-MM-DD') AS start_date,to_char(a.end_date,'YYYY-MM-DD') AS end_date,to_char(a.start_time,'HH24:MI') AS start_time,to_char(a.end_time,'HH24:MI') AS end_time,a.note FROM attendance a WHERE a.employee_id=$1 AND a.start_date < ($2::date+interval '1 month') AND a.end_date >= $2::date ORDER BY a.start_date,a.id`,[employeeId,month+'-01']);
+  const progress=await pool.query('SELECT no_attendance FROM attendance_registration_progress WHERE employee_id=$1 AND month=$2::date',[employeeId,month+'-01']);
   res.json({month,items:r.rows,no_attendance:!r.rows.length&&!!progress.rows[0]?.no_attendance});
  }));
  app.put('/api/registration-attendance/none',user,wrap(async(req,res)=>{
-  const month=validateMonth(req,res);if(!month)return;
+  const month=validateMonth(req,res);if(!month)return;const employeeId=await targetEmployee(req,res);if(employeeId===null)return;
   const c=await pool.connect();try{
    await c.query('BEGIN');await lockPeriods(c,[`attendance:${month}`]);
    if(req.user.role!=='admin'){
     const period=(await c.query("SELECT start_date::text AS s,deadline_date::text AS d FROM monthly_deadlines WHERE kind='attendance' AND month=$1::date",[month+'-01'])).rows[0];
     if(!period?.s||seoulDate()<period.s||seoulDate()>period.d){await c.query('ROLLBACK');return res.status(403).json({error:'근태 등록 기간이 아닙니다.'})}
    }
-   const existing=await c.query("SELECT 1 FROM attendance WHERE employee_id=$1 AND start_date < ($2::date+interval '1 month') AND end_date >= $2::date LIMIT 1",[req.user.id,month+'-01']);
+   const existing=await c.query("SELECT 1 FROM attendance WHERE employee_id=$1 AND start_date < ($2::date+interval '1 month') AND end_date >= $2::date LIMIT 1",[employeeId,month+'-01']);
    if(existing.rowCount){await c.query('ROLLBACK');return res.status(409).json({error:'이미 등록된 근태 일정이 있습니다.'})}
-   await c.query('INSERT INTO attendance_registration_progress(month,employee_id,no_attendance) VALUES($1::date,$2,true) ON CONFLICT(month,employee_id) DO UPDATE SET no_attendance=true,updated_at=now()',[month+'-01',req.user.id]);
+   await c.query('INSERT INTO attendance_registration_progress(month,employee_id,no_attendance) VALUES($1::date,$2,true) ON CONFLICT(month,employee_id) DO UPDATE SET no_attendance=true,updated_at=now()',[month+'-01',employeeId]);
+   if(Number(employeeId)!==Number(req.user.id))await c.query('INSERT INTO audit_log(actor_id,action,record_id,after_data) VALUES($1,$2,$3,$4)',[req.user.id,'근태 일정 없음 확인',employeeId,JSON.stringify({month,employee_id:employeeId})]);
    await c.query('COMMIT');res.json({ok:true});
   }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
  }));

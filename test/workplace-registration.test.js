@@ -145,3 +145,23 @@ test('bulk workplace assignment is atomic, rejects already assigned employees an
   const audit=await db.query("SELECT count(*)::int AS n FROM audit_log WHERE action='작업장 일괄 배치'");assert.equal(audit.rows[0].n,2);
  }finally{await db.close()}
 });
+
+test('administrators can manage another employee registration while employees remain isolated',async()=>{
+ const {db,app}=await setup();try{
+  await db.exec("INSERT INTO monthly_workplace_assignments(month,employee_id,workplace) VALUES('2026-12-01',1,'하림'),('2026-12-01',2,'동우'),('2027-01-01',2,'동우'); INSERT INTO attendance(employee_id,type,start_date,end_date,note) VALUES(2,'연차','2026-12-09','2026-12-09','');");
+  let r=await request(app).get('/api/registration-attendance').query({month:'2026-12',employee_id:2}).expect(200);assert.equal(r.body.items.length,1);
+  r=await request(app).get('/api/my-workplace').query({month:'2026-12',employee_id:2}).expect(200);assert.equal(r.body.workplace,'동우');
+  await request(app).put('/api/registration-attendance/none').send({month:'2026-12',employee_id:2}).expect(409);
+  await request(app).put('/api/registration-attendance/none').send({month:'2027-01',employee_id:2}).expect(200);
+  r=await request(app).get('/api/registration-attendance').query({month:'2027-01',employee_id:2}).expect(200);assert.equal(r.body.no_attendance,true);
+  await request(app).put('/api/night-registration').send({month:'2026-12',employee_id:2,week_start:'2026-12-27',unavailable:true}).expect(200);
+  r=await request(app).get('/api/night-registration').query({month:'2027-01',employee_id:2}).expect(200);assert.equal(r.body.weeks.find(w=>w.start==='2026-12-27').unavailable,true);
+  await request(app).put('/api/night-registration').send({month:'2026-12',employee_id:2,confirm:true}).expect(200);
+  r=await request(app).get('/api/night-registration').query({month:'2026-12',employee_id:2}).expect(200);assert.equal(r.body.confirmed,true);
+  const audit=(await db.query("SELECT actor_id,after_data FROM audit_log WHERE action='야간 불가능 주간 변경'")).rows[0];assert.equal(Number(audit.actor_id),1);assert.equal(Number(audit.after_data.employee_id),2);
+  for(const path of ['/api/night-registration','/api/registration-attendance','/api/my-workplace'])await request(app).get(path).query({month:'2026-12',employee_id:1}).set('x-test-role','employee').expect(403);
+  await request(app).put('/api/night-registration').set('x-test-role','employee').send({month:'2026-12',employee_id:1,week_start:'2026-11-30',unavailable:true}).expect(403);
+  await request(app).put('/api/registration-attendance/none').set('x-test-role','employee').send({month:'2026-12',employee_id:1}).expect(403);
+  await request(app).get('/api/night-registration').query({month:'2026-12',employee_id:3}).expect(400);
+ }finally{await db.close()}
+});
