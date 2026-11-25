@@ -41,13 +41,20 @@ module.exports=function attachShifts(app,pool,user,admin,wrap){
   const options=[['하림','조출'],['하림','야간'],['동우','후출'],['동우','야간'],['싱그린','조출'],['싱그린','후출']];
   res.json(options.map(([workplace,shift])=>({workplace,shift,slots:R.shiftSpec(workplace,shift).slots,weeks:R.weeks(month,workplace,shift)})));
  }));
+ app.get('/api/weekly-shift/month',user,admin,wrap(async(req,res)=>{
+  const month=String(req.query.month||'');if(!monthOK(month))return res.status(400).json({error:'월을 확인하세요.'});
+  const options=[['하림','조출'],['하림','야간'],['동우','후출'],['동우','야간'],['싱그린','조출'],['싱그린','후출']].map(([workplace,shift])=>({workplace,shift,slots:R.shiftSpec(workplace,shift).slots,weeks:R.weeks(month,workplace,shift)}));
+  const assignments=(await pool.query(`SELECT workplace,shift,week_start::text AS week_start,slot,employee_id FROM weekly_shift_assignments WHERE week_start >= ($1::date-interval '7 days') AND week_start < ($1::date+interval '1 month')`,[month+'-01'])).rows;
+  const overrides=(await pool.query(`SELECT workplace,shift,week_start::text AS week_start,slot,work_date::text AS work_date,employee_id FROM weekly_shift_overrides WHERE work_date >= ($1::date-interval '7 days') AND work_date < ($1::date+interval '1 month 7 days')`,[month+'-01'])).rows;
+  res.json({options,assignments,overrides});
+ }));
  app.get('/api/weekly-shift',user,admin,wrap(async(req,res)=>{
   const q=selected(req,res);if(!q)return;const rows=(await pool.query('SELECT slot,employee_id FROM weekly_shift_assignments WHERE workplace=$1 AND shift=$2 AND week_start=$3::date ORDER BY slot',[q.workplace,q.shift,q.start])).rows;
   const counts=(await pool.query(`SELECT employee_id,week_start::text AS week_start FROM weekly_shift_assignments WHERE workplace=$1 AND shift=$2 AND week_start >= ($3::date-interval '7 days') AND week_start < ($4::date+interval '1 month')`,[q.workplace,q.shift,previous(q.month)+'-01',q.month+'-01'])).rows;
   const overrides=(await pool.query('SELECT slot,work_date::text AS work_date,employee_id FROM weekly_shift_overrides WHERE workplace=$1 AND shift=$2 AND week_start=$3::date ORDER BY work_date,slot',[q.workplace,q.shift,q.start])).rows;
   const replacements=(await pool.query(`SELECT o.employee_id,o.week_start::text AS week_start,count(DISTINCT o.work_date)::int AS days FROM weekly_shift_overrides o JOIN weekly_shift_assignments w USING(workplace,shift,week_start,slot) WHERE o.workplace=$1 AND o.shift=$2 AND o.employee_id IS NOT NULL AND o.employee_id<>w.employee_id AND o.week_start >= ($3::date-interval '7 days') AND o.week_start < ($4::date+interval '1 month') GROUP BY o.employee_id,o.week_start`,[q.workplace,q.shift,previous(q.month)+'-01',q.month+'-01'])).rows;
   const people=await candidates(pool,q);for(const p of people){p.previous_count=0;p.current_count=0;for(const x of counts.filter(x=>String(x.employee_id)===String(p.id))){const m=R.countMonth(x.week_start);if(m===q.month)p.current_count++;if(m===previous(q.month))p.previous_count++}for(const x of replacements.filter(x=>String(x.employee_id)===String(p.id)&&x.days>=3)){const m=R.countMonth(x.week_start);if(m===q.month)p.current_count+=0.5;if(m===previous(q.month))p.previous_count+=0.5}}
-  const friday=q.workplace==='동우'&&q.shift==='야간'?(await pool.query('SELECT slot FROM dongwoo_friday_time WHERE week_start=$1::date',[q.start])).rows[0]?.slot??null:null;
+  const friday=q.workplace==='동우'&&q.shift==='야간'?2:null;
   res.json({week:q.start,end:q.end,assignments:rows,overrides,candidates:people,friday_slot:friday});
  }));
  app.put('/api/weekly-shift',user,admin,wrap(async(req,res)=>{
@@ -63,14 +70,14 @@ module.exports=function attachShifts(app,pool,user,admin,wrap){
    }
    const old=(await c.query('SELECT employee_id FROM weekly_shift_assignments WHERE workplace=$1 AND shift=$2 AND week_start=$3::date AND slot=$4',[q.workplace,q.shift,q.start,slot])).rows[0]?.employee_id||null;
    if(String(old??'')===String(id??'')){await c.query('COMMIT');return res.json({ok:true,unchanged:true})}
-   if(id===null){if(q.workplace==='동우'&&q.shift==='야간'&&(await c.query('SELECT 1 FROM dongwoo_friday_time WHERE week_start=$1::date AND slot=$2',[q.start,slot])).rowCount){await c.query('ROLLBACK');return res.status(409).json({error:'금요일 특별시간 담당을 먼저 해제하세요.'})}const hasOverrides=await c.query('SELECT 1 FROM weekly_shift_overrides WHERE workplace=$1 AND shift=$2 AND week_start=$3::date AND slot=$4 LIMIT 1',[q.workplace,q.shift,q.start,slot]);if(hasOverrides.rowCount){await c.query('ROLLBACK');return res.status(409).json({error:'날짜별 대체를 먼저 기본 담당으로 되돌린 뒤 주 담당자를 해제하세요.'})}await c.query('DELETE FROM weekly_shift_assignments WHERE workplace=$1 AND shift=$2 AND week_start=$3::date AND slot=$4',[q.workplace,q.shift,q.start,slot]);}
+   if(id===null){const hasOverrides=await c.query('SELECT 1 FROM weekly_shift_overrides WHERE workplace=$1 AND shift=$2 AND week_start=$3::date AND slot=$4 LIMIT 1',[q.workplace,q.shift,q.start,slot]);if(hasOverrides.rowCount){await c.query('ROLLBACK');return res.status(409).json({error:'날짜별 대체를 먼저 기본 담당으로 되돌린 뒤 주 담당자를 해제하세요.'})}await c.query('DELETE FROM weekly_shift_assignments WHERE workplace=$1 AND shift=$2 AND week_start=$3::date AND slot=$4',[q.workplace,q.shift,q.start,slot]);}
    else await c.query('INSERT INTO weekly_shift_assignments(workplace,shift,week_start,slot,employee_id) VALUES($1,$2,$3::date,$4,$5) ON CONFLICT(workplace,shift,week_start,slot) DO UPDATE SET employee_id=EXCLUDED.employee_id,updated_at=now()',[q.workplace,q.shift,q.start,slot,id]);
    await c.query('INSERT INTO audit_log(actor_id,action,before_data,after_data) VALUES($1,$2,$3,$4)',[req.user.id,'주별 담당자 변경',JSON.stringify({workplace:q.workplace,shift:q.shift,week_start:q.start,slot,employee_id:old}),JSON.stringify({workplace:q.workplace,shift:q.shift,week_start:q.start,slot,employee_id:id})]);
    await c.query('COMMIT');res.json({ok:true});
   }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
  }));
  app.put('/api/weekly-shift/friday-time',user,admin,wrap(async(req,res)=>{
-  const q=selected(req,res);if(!q)return;if(q.workplace!=='동우'||q.shift!=='야간')return res.status(400).json({error:'동우 야간 주간을 선택하세요.'});const slot=req.body.slot===null?null:Number(req.body.slot);if(slot!==null&&![1,2].includes(slot))return res.status(400).json({error:'야간 담당 칸을 확인하세요.'});
+  const q=selected(req,res);if(!q)return;if(q.workplace!=='동우'||q.shift!=='야간')return res.status(400).json({error:'동우 야간 주간을 선택하세요.'});const slot=req.body.slot===null?null:Number(req.body.slot);if(slot!==null&&slot!==2)return res.status(409).json({error:'금요일 특별시간은 동우 야간 담당 2로 고정되어 있습니다.'});
   const c=await pool.connect();try{await c.query('BEGIN');await lockPeriods(c,months(q.start,q.end).flatMap(m=>[`attendance:${m}`,`holiday:${m}`]));await c.query('SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))',['weekly-shifts-v1',q.start]);
    const before=(await c.query('SELECT slot FROM dongwoo_friday_time WHERE week_start=$1::date',[q.start])).rows[0]?.slot??null;
    if(slot!==null&&!(await c.query("SELECT 1 FROM weekly_shift_assignments WHERE workplace='동우' AND shift='야간' AND week_start=$1::date AND slot=$2",[q.start,slot])).rowCount){await c.query('ROLLBACK');return res.status(409).json({error:'먼저 해당 야간 담당자를 지정하세요.'})}

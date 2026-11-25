@@ -128,3 +128,36 @@ test('singgreen support stores the selected shift without altering the base work
  await request(app).put('/api/workplace-support').send({date:'2026-12-01',employee_id:1,workplace:'싱그린',shift:'bad'}).expect(400);
  assert.equal((await db.query("SELECT workplace FROM monthly_workplace_assignments WHERE employee_id=1 AND month='2026-12-01'")).rows[0].workplace,'하림');
  }finally{await db.close()}});
+
+test('moving a holiday assignment is atomic and retains the original on invalid target',async()=>{const {db,app}=await setup();try{
+ await request(app).put('/api/holiday-plan/assignment').send({...assignment,employee_id:1}).expect(200);
+ await request(app).put('/api/holiday-plan/assignment').send({...assignment,shift:'야간',slot:1,employee_id:3}).expect(409);
+ let r=await request(app).put('/api/holiday-plan/assignment').send({...assignment,workplace:'동우',shift:'야간',slot:1,employee_id:1,move_existing:true}).expect(409);
+ let state=await request(app).get('/api/holiday-plan?month=2026-12').expect(200);assert(state.body.assignments.some(a=>Number(a.employee_id)===1&&a.workplace==='하림'));
+ await request(app).put('/api/holiday-plan/assignment').send({...assignment,workplace:'싱그린',shift:'조출',slot:1,employee_id:1,move_existing:true}).expect(200);
+ state=await request(app).get('/api/holiday-plan?month=2026-12').expect(200);const rows=state.body.assignments.filter(a=>Number(a.employee_id)===1&&a.date==='2026-12-05');assert.equal(rows.length,1);assert.equal(rows[0].workplace,'싱그린');
+ }finally{await db.close()}});
+
+test('month weekly grid is administrator-only and contains cross-month weeks',async()=>{const {db,app}=await setup();try{
+ await request(app).get('/api/weekly-shift/month?month=2026-12').set('x-role','employee').expect(403);const r=await request(app).get('/api/weekly-shift/month?month=2026-12').expect(200);const dong=r.body.options.find(o=>o.workplace==='동우'&&o.shift==='야간');assert(dong.weeks.some(w=>w.start==='2026-11-29'&&w.end==='2026-12-04'));assert(dong.weeks.some(w=>w.start==='2026-12-27'&&w.end==='2027-01-01'));
+ }finally{await db.close()}});
+
+test('automatic rerun varies the plan without moving locked placements or double-booking',async()=>{const {db,app}=await setup();try{
+ await db.exec("UPDATE holiday_preferences SET status='available',night_status='allowed'");
+ await request(app).put('/api/holiday-plan/assignment').send({...assignment,employee_id:1}).expect(200);
+ let a=await request(app).post('/api/holiday-plan/auto').send({month:'2026-12'}).expect(200);
+ let first=(await request(app).get('/api/holiday-plan?month=2026-12').expect(200)).body.assignments;
+ let b=await request(app).post('/api/holiday-plan/auto').send({month:'2026-12'}).expect(200);
+ let second=(await request(app).get('/api/holiday-plan?month=2026-12').expect(200)).body.assignments;
+ const sig=rows=>rows.filter(x=>!x.locked).map(x=>[x.date,x.workplace,x.shift,x.slot,x.employee_id,x.external_id].join('|')).sort().join(';');
+ assert.notEqual(sig(first),sig(second));assert.equal(b.body.same_result,false);
+ for(const rows of [first,second]){assert(rows.some(x=>x.date==='2026-12-05'&&x.workplace==='하림'&&x.shift==='주간'&&Number(x.slot)===2&&Number(x.employee_id)===1&&x.locked));const occupied=rows.filter(x=>x.employee_id).map(x=>x.date+':'+x.employee_id);assert.equal(new Set(occupied).size,occupied.length)}
+ }finally{await db.close()}});
+
+test('removing holiday support clears both related records in one transaction',async()=>{const {db,app}=await setup();try{
+ await request(app).put('/api/workplace-support').send({date:'2026-12-05',employee_id:1,workplace:'싱그린',shift:'조출'}).expect(200);
+ const entry={month:'2026-12',date:'2026-12-05',workplace:'싱그린',shift:'조출',slot:1};await request(app).put('/api/holiday-plan/assignment').send({...entry,employee_id:1}).expect(200);
+ await request(app).put('/api/holiday-plan/assignment').send({...entry,employee_id:null,external_id:null,clear_support:true}).expect(200);
+ assert.equal(Number((await db.query("SELECT count(*) AS n FROM daily_workplace_support WHERE employee_id=1 AND work_date='2026-12-05'")).rows[0].n),0);
+ assert.equal(Number((await db.query("SELECT count(*) AS n FROM holiday_plan_assignments WHERE employee_id=1 AND work_date='2026-12-05'")).rows[0].n),0);
+ }finally{await db.close()}});

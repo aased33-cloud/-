@@ -29,7 +29,6 @@ async function readRoster(pool,month){
    }else if(items.some(x=>x.start_date<=day.date&&x.end_date>=day.date))warnings.push({type:'주별 담당자의 근태 확인',date:day.date,workplace:a.workplace,shift:a.shift,slot:a.slot});
   }
   for(const [workplace,shift,slot] of expected)if(!actual.some(a=>a.workplace===workplace&&a.shift===shift&&Number(a.slot)===slot))warnings.push({type:'주별 담당 미배치',date:day.date,workplace,shift,slot});
-  if(day.weekday===5){const night=actual.filter(a=>a.workplace==='동우'&&a.shift==='야간');if(night.length&&!night.some(a=>friday.some(f=>f.week_start===a.week_start&&Number(f.slot)===Number(a.slot))))warnings.push({type:'금요일 특별시간 미지정',date:day.date,workplace:'동우',shift:'야간'});}
  }
  return {...roster,warnings};
 }

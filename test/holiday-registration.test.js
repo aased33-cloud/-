@@ -29,3 +29,12 @@ test('all-available updates day and night, preserves notes, skips exclusions, an
   const again=await request(app).put('/api/holiday-preferences/bulk-available').send({month:'2026-12',employee_id:2}).expect(200);assert.equal(again.body.changed,0);
  }finally{await db.close()}
 });
+
+test('employee can change unavailable to available within the open registration period',async()=>{const {db,app}=await setup();try{
+ const today=require('../rules').seoulDate(),[y,m]=today.slice(0,7).split('-').map(Number),target=new Date(Date.UTC(y,m,1)).toISOString().slice(0,10),holiday=new Date(Date.UTC(y,m,5)).toISOString().slice(0,10);
+ await db.query("INSERT INTO monthly_deadlines(kind,month,start_date,deadline_date) VALUES('holiday',$1::date,$2::date,$2::date)",[target,today]);
+ const row=(await db.query("INSERT INTO holiday_dates(holiday_date,label) VALUES($1::date,'휴일') RETURNING id",[holiday])).rows[0];
+ await request(app).put('/api/holiday-preferences/'+row.id).set('x-test-role','employee').send({status:'unavailable',night_status:'unavailable'}).expect(200);
+ await request(app).put('/api/holiday-preferences/'+row.id).set('x-test-role','employee').send({status:'available',night_status:'allowed'}).expect(200);
+ const pref=(await db.query('SELECT status,night_status FROM holiday_preferences WHERE holiday_id=$1 AND employee_id=2',[row.id])).rows[0];assert.deepEqual(pref,{status:'available',night_status:'allowed'});
+ }finally{await db.close()}});
