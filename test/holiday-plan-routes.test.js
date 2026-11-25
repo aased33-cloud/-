@@ -13,7 +13,7 @@ async function setup(){
  INSERT INTO holiday_preferences(holiday_id,employee_id,status,night_status) SELECT id,2,'unavailable','allowed' FROM holiday_dates;
  INSERT INTO holiday_preferences(holiday_id,employee_id,status,night_status) SELECT id,3,'available','unavailable' FROM holiday_dates;`);
  const client={query:(...args)=>db.query(...args).then(r=>({...r,rowCount:String(args[0]).trim().startsWith('SELECT')?r.rows.length:(r.affectedRows??r.rows.length)})),release:()=>{}},pool={query:client.query,connect:async()=>client},app=express();app.use(express.json());
- const user=(req,res,next)=>{req.user={id:1,role:req.get('x-role')||'admin'};next()},admin=(req,res,next)=>req.user.role==='admin'?next():res.sendStatus(403),wrap=fn=>(req,res)=>Promise.resolve(fn(req,res)).catch(e=>{console.error(e);res.sendStatus(500)});require('../holiday-plan-routes')(app,pool,user,admin,wrap);require('../shift-routes')(app,pool,user,admin,wrap);require('../support-routes')(app,pool,user,admin,wrap);require('../roster-routes')(app,pool,user,admin,wrap);return {db,app};
+ const user=(req,res,next)=>{const role=req.get('x-role')||'admin';req.user={id:role==='employee'?2:1,role};next()},admin=(req,res,next)=>req.user.role==='admin'?next():res.sendStatus(403),wrap=fn=>(req,res)=>Promise.resolve(fn(req,res)).catch(e=>{console.error(e);res.sendStatus(500)});require('../extra-routes')(app,pool,user,admin,wrap);require('../holiday-plan-routes')(app,pool,user,admin,wrap);require('../shift-routes')(app,pool,user,admin,wrap);require('../support-routes')(app,pool,user,admin,wrap);require('../roster-routes')(app,pool,user,admin,wrap);return {db,app};
 }
 const assignment={month:'2026-12',date:'2026-12-05',workplace:'하림',shift:'주간',slot:2};
 test('manual placement checks availability, privileges, duplicates and night eligibility',async()=>{const {db,app}=await setup();try{
@@ -93,4 +93,26 @@ test('roster check warns when attendance is added after weekly night assignment'
  const weekly={month:'2026-12',workplace:'하림',shift:'야간',week_start:'2026-11-30',slot:1,employee_id:1};await request(app).put('/api/weekly-shift').send(weekly).expect(200);
  await db.exec("INSERT INTO attendance(employee_id,type,start_date,end_date,note) VALUES(1,'병가','2026-12-01','2026-12-01','')");
  const r=await request(app).get('/api/monthly-roster/check?month=2026-12').expect(200);assert(r.body.warnings.some(w=>w.date==='2026-12-01'&&w.type==='야간 담당 근태·불가 주간 확인'));
+ }finally{await db.close()}});
+test('added holiday shares employee registration and remains unregistered after the deadline',async()=>{const {db,app}=await setup();try{
+ const month='2020-01',date='2020-01-14';await db.exec("INSERT INTO monthly_deadlines(kind,month,start_date,deadline_date) VALUES('holiday','2020-01-01','2019-12-01','2019-12-02')");
+ await request(app).post('/api/holidays').set('x-role','employee').send({holiday_date:date,label:'추가 휴일'}).expect(403);
+ await request(app).post('/api/holidays').send({holiday_date:date,label:'추가 휴일'}).expect(200);
+ const holidays=await request(app).get('/api/holidays').set('x-role','employee').query({month}).expect(200),day=holidays.body.find(x=>x.holiday_date===date);assert(day);
+ const prefs=await request(app).get('/api/holiday-preferences').set('x-role','employee').query({month}).expect(200);assert(!prefs.body.some(x=>Number(x.holiday_id)===Number(day.id)));
+ await request(app).put('/api/holiday-preferences/'+day.id).set('x-role','employee').send({status:'available',night_status:'allowed'}).expect(403);
+ const plan=await request(app).get('/api/holiday-plan').query({month}).expect(200);assert(plan.body.dates.some(x=>x.date===date));assert(!plan.body.preferences.some(x=>x.date===date));
+ const auto=await request(app).post('/api/holiday-plan/auto').send({month}).expect(409);assert(auto.body.warning.includes('미등록'));assert(auto.body.missing.some(x=>x.date===date));
+ for(const workplace of ['정다운','중앙축산','앤에프']){await request(app).put('/api/holiday-plan/requirements').send({month,date,workplace,shift:'주간',required:2}).expect(200)}
+ const updated=await request(app).get('/api/holiday-plan').query({month}).expect(200);for(const workplace of ['정다운','중앙축산','앤에프'])assert.equal(updated.body.defaults[[date,workplace,'주간',''].join('|')],2);
+ await request(app).put('/api/holiday-preferences/'+day.id).send({employee_id:2,status:'available',night_status:'allowed'}).expect(200);
+ const recorded=await request(app).get('/api/holiday-preferences').set('x-role','employee').query({month}).expect(200);assert(recorded.body.some(x=>x.holiday_date===date&&x.status==='available'));
+ }finally{await db.close()}});
+test('re-adding an excluded holiday preserves earlier employee preferences',async()=>{const {db,app}=await setup();try{
+ const row=(await db.query("INSERT INTO holiday_dates(holiday_date,label,excluded) VALUES('2020-01-15','기존',true) RETURNING id")).rows[0];
+ await db.query("INSERT INTO holiday_preferences(holiday_id,employee_id,status,night_status,note) VALUES($1,2,'unavailable','allowed','보존')",[row.id]);
+ await request(app).post('/api/holidays').send({holiday_date:'2020-01-15',label:'다시 사용'}).expect(200);
+ const p=(await db.query('SELECT status,night_status,note FROM holiday_preferences WHERE holiday_id=$1 AND employee_id=2',[row.id])).rows[0];assert.deepEqual(p,{status:'unavailable',night_status:'allowed',note:'보존'});
+ await request(app).post('/api/holidays').send({holiday_date:'2020-01-15',label:'다른 이름'}).expect(409);
+ const h=(await db.query('SELECT label,excluded FROM holiday_dates WHERE id=$1',[row.id])).rows[0];assert.deepEqual(h,{label:'다시 사용',excluded:false});
  }finally{await db.close()}});
