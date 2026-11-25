@@ -177,6 +177,7 @@ CREATE TABLE IF NOT EXISTS daily_workplace_support (
  workplace text NOT NULL CHECK(workplace IN ('하림','싱그린','정다운','동우','앤에프','중앙축산')),
  updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(work_date,employee_id)
 );
+ALTER TABLE daily_workplace_support ADD COLUMN IF NOT EXISTS shift text;
 ALTER TABLE daily_workplace_support ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE daily_workplace_support FROM PUBLIC,anon,authenticated;
 COMMIT;

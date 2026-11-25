@@ -117,8 +117,14 @@ test('re-adding an excluded holiday preserves earlier employee preferences',asyn
  const h=(await db.query('SELECT label,excluded FROM holiday_dates WHERE id=$1',[row.id])).rows[0];assert.deepEqual(h,{label:'다시 사용',excluded:false});
  }finally{await db.close()}});
 
-test('empty roster export returns an explanatory error instead of a blank workbook',async()=>{const {db,app}=await setup();try{
- await db.exec('UPDATE employees SET active=false');
- const r=await request(app).get('/api/monthly-roster/export?month=2026-12').expect(422);
- assert.match(r.headers['content-type'],/application\/json/);assert.match(r.body.error,/출력할 근무자가 없습니다/);
+test('empty or unassigned roster downloads the formatted two-sheet workbook',async()=>{const {db,app}=await setup();try{
+ const ExcelJS=require('exceljs'),read=()=>request(app).get('/api/monthly-roster/export?month=2026-12').buffer(true).parse((r,cb)=>{const chunks=[];r.on('data',x=>chunks.push(x));r.on('end',()=>cb(null,Buffer.concat(chunks)))}).expect(200);
+ await db.exec('UPDATE employees SET active=false');let r=await read(),w=new ExcelJS.Workbook();await w.xlsx.load(r.body);assert.equal(w.worksheets.length,2);assert.equal(w.worksheets[0].getCell('F4').value,1);assert.equal(w.worksheets[1].getCell('G4').value,1);assert.match(String(w.worksheets[0].getCell('C5').value),/07:10/);
+ await db.exec("UPDATE employees SET active=true;DELETE FROM monthly_workplace_assignments WHERE month='2026-12-01'");const check=await request(app).get('/api/monthly-roster/preview?month=2026-12').expect(200);assert.equal(check.body.issues.filter(x=>x.type==='미배치').length,3);r=await read();w=new ExcelJS.Workbook();await w.xlsx.load(r.body);assert.equal(w.worksheets.length,2);
+ }finally{await db.close()}});
+
+test('singgreen support stores the selected shift without altering the base workplace',async()=>{const {db,app}=await setup();try{
+ for(const shift of ['조출','후출']){await request(app).put('/api/workplace-support').send({date:'2026-12-01',employee_id:1,workplace:'싱그린',shift}).expect(200);const r=await request(app).get('/api/workplace-support?month=2026-12').expect(200);assert.equal(r.body.items[0].shift,shift);const roster=await request(app).get('/api/monthly-roster/preview?month=2026-12').expect(200);assert.equal(roster.body.days[0].places['싱그린'].find(x=>Number(x.employee_id)===1).shift,shift)}
+ await request(app).put('/api/workplace-support').send({date:'2026-12-01',employee_id:1,workplace:'싱그린',shift:'bad'}).expect(400);
+ assert.equal((await db.query("SELECT workplace FROM monthly_workplace_assignments WHERE employee_id=1 AND month='2026-12-01'")).rows[0].workplace,'하림');
  }finally{await db.close()}});
