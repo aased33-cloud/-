@@ -9,7 +9,7 @@ function dayOf(date){return new Date(date+'T00:00:00Z').getUTCDay()}
 function defaults(date,workplace,shift){const weekday=dayOf(date)>=1&&dayOf(date)<=5;if(workplace==='하림')return shift==='주간'?6:shift==='야간'?2:0;if(workplace==='동우')return shift==='주간'?2:shift==='후출'?1:shift==='야간'?2:0;if(workplace==='싱그린')return shift==='조출'||shift==='후출'?1:0;if(workplace==='정다운'&&weekday&&shift==='주간')return 1;return 0}
 function key(date,workplace,shift,slot){return [date,workplace,shift,slot].join('|')}
 async function readState(c,month){
- const param=[month+'-01'],dates=(await c.query(`SELECT id,holiday_date::text date,label FROM holiday_dates WHERE excluded=false AND holiday_date >= $1::date AND holiday_date < ($1::date+interval '1 month') ORDER BY holiday_date`,param)).rows;
+ const param=[month+'-01'],dates=(await c.query(`SELECT id,holiday_date::text date,label,auto_saturday FROM holiday_dates WHERE excluded=false AND holiday_date >= $1::date AND holiday_date < ($1::date+interval '1 month') ORDER BY holiday_date`,param)).rows;
  const staff=(await c.query(`SELECT e.id,e.name,e.employee_no,coalesce(a.workplace,'미배치') base FROM employees e LEFT JOIN monthly_workplace_assignments a ON a.employee_id=e.id AND a.month=$1::date WHERE e.active=true ORDER BY e.name,e.employee_no`,param)).rows;
  const preferences=(await c.query(`SELECT p.employee_id,h.holiday_date::text date,p.status,p.night_status FROM holiday_preferences p JOIN holiday_dates h ON h.id=p.holiday_id WHERE h.excluded=false AND h.holiday_date >= $1::date AND h.holiday_date < ($1::date+interval '1 month')`,param)).rows;
  const external=(await c.query('SELECT id,name FROM holiday_external_people WHERE month=$1::date AND active=true ORDER BY name,id',param)).rows;
@@ -17,7 +17,7 @@ async function readState(c,month){
  const externalAvailability=(await c.query(`SELECT a.external_id,a.work_date::text date,a.available FROM holiday_external_availability a JOIN holiday_external_people p ON p.id=a.external_id WHERE p.month=$1::date AND p.active=true`,param)).rows;
  const requirements=(await c.query(`SELECT work_date::text date,workplace,shift,required FROM holiday_plan_requirements WHERE work_date >= $1::date AND work_date < ($1::date+interval '1 month')`,param)).rows;
  const assignments=(await c.query(`SELECT work_date::text date,workplace,shift,slot,employee_id,external_id,locked FROM holiday_plan_assignments WHERE work_date >= $1::date AND work_date < ($1::date+interval '1 month')`,param)).rows;
- const attendance=(await c.query(`SELECT employee_id,type,start_date::text AS start_date,end_date::text AS end_date,start_time::text AS start_time,end_time::text AS end_time FROM attendance WHERE start_date < ($1::date+interval '1 month 7 days') AND end_date >= ($1::date-interval '7 days')`,param)).rows;
+ const attendance=(await c.query(`SELECT id,employee_id,type,start_date::text AS start_date,end_date::text AS end_date,start_time::text AS start_time,end_time::text AS end_time,note FROM attendance WHERE start_date < ($1::date+interval '1 month 7 days') AND end_date >= ($1::date-interval '7 days')`,param)).rows;
  const support=(await c.query(`SELECT work_date::text AS date,employee_id,workplace FROM daily_workplace_support WHERE work_date >= $1::date AND work_date < ($1::date+interval '1 month')`,param)).rows;
  const exclusions=(await c.query('SELECT employee_id FROM employee_night_exclusions WHERE blocked=true')).rows;
  const restrictions=(await c.query('SELECT employee_id,restriction FROM employee_shift_restrictions')).rows;

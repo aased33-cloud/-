@@ -116,3 +116,9 @@ test('re-adding an excluded holiday preserves earlier employee preferences',asyn
  await request(app).post('/api/holidays').send({holiday_date:'2020-01-15',label:'다른 이름'}).expect(409);
  const h=(await db.query('SELECT label,excluded FROM holiday_dates WHERE id=$1',[row.id])).rows[0];assert.deepEqual(h,{label:'다시 사용',excluded:false});
  }finally{await db.close()}});
+
+test('empty roster export returns an explanatory error instead of a blank workbook',async()=>{const {db,app}=await setup();try{
+ await db.exec('UPDATE employees SET active=false');
+ const r=await request(app).get('/api/monthly-roster/export?month=2026-12').expect(422);
+ assert.match(r.headers['content-type'],/application\/json/);assert.match(r.body.error,/출력할 근무자가 없습니다/);
+ }finally{await db.close()}});
