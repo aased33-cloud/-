@@ -18,7 +18,7 @@ async function readState(c,month){
  const requirements=(await c.query(`SELECT work_date::text date,workplace,shift,required FROM holiday_plan_requirements WHERE work_date >= $1::date AND work_date < ($1::date+interval '1 month')`,param)).rows;
  const assignments=(await c.query(`SELECT work_date::text date,workplace,shift,slot,employee_id,external_id,locked FROM holiday_plan_assignments WHERE work_date >= $1::date AND work_date < ($1::date+interval '1 month')`,param)).rows;
  const attendance=(await c.query(`SELECT id,employee_id,type,start_date::text AS start_date,end_date::text AS end_date,start_time::text AS start_time,end_time::text AS end_time,note FROM attendance WHERE start_date < ($1::date+interval '1 month 7 days') AND end_date >= ($1::date-interval '7 days')`,param)).rows;
- const support=(await c.query(`SELECT work_date::text AS date,employee_id,workplace FROM daily_workplace_support WHERE work_date >= $1::date AND work_date < ($1::date+interval '1 month')`,param)).rows;
+ const support=(await c.query(`SELECT work_date::text AS date,employee_id,workplace,shift FROM daily_workplace_support WHERE work_date >= $1::date AND work_date < ($1::date+interval '1 month')`,param)).rows;
  const exclusions=(await c.query('SELECT employee_id FROM employee_night_exclusions WHERE blocked=true')).rows;
  const restrictions=(await c.query('SELECT employee_id,restriction FROM employee_shift_restrictions')).rows;
  const unavailableWeeks=(await c.query(`SELECT employee_id,workplace,week_start::text AS week_start FROM night_unavailable_weeks WHERE week_start >= ($1::date-interval '7 days') AND week_start < ($1::date+interval '1 month')`,param)).rows;
