@@ -13,7 +13,7 @@ function buildMonthlyRoster({month,staff,external=[],attendance=[],support=[],we
   const date=month+'-'+String(i).padStart(2,'0'),weekday=dayName(date),holiday=holidays.has(date),weeklyDay=effectiveWeekly(date,weekly,overrides),special=holidayAssignments.filter(a=>a.date===date),places=Object.fromEntries(WORK.map(w=>[w,[]])),byPerson=new Map(),bySlot=new Map();
   const addActual=(person,where,shift,slot,source,extra={})=>{
    if(!WORK.includes(where)){issues.push({type:'작업장 오류',date,message:'유효하지 않은 작업장'});return}
-   const key=source+':'+person.id,entry={date,employee_id:source==='staff'?person.id:null,external_id:source==='external'?person.id:null,name:person.name,base:person.base||null,workplace:where,shift,slot:slot||null,support:source==='staff'&&!!person.base&&person.base!==where,attendance:source==='staff'?attendanceLabel(attendance,date,person.id):'',attendanceDetails:source==='staff'?attendanceDetails(attendance,date,person.id):[],...extra};
+   const key=source+':'+person.id,entry={date,employee_id:source==='staff'?person.id:null,external_id:source==='external'?person.id:null,name:person.name,employee_no:person.employee_no||null,base:person.base||null,workplace:where,shift,slot:slot||null,support:source==='staff'&&!!person.base&&person.base!==where,attendance:source==='staff'?attendanceLabel(attendance,date,person.id):'',attendanceDetails:source==='staff'?attendanceDetails(attendance,date,person.id):[],...extra};
    if(byPerson.has(key)){const old=byPerson.get(key);if(old.workplace===where&&old.shift===shift&&old.slot===entry.slot)return;issues.push({type:'중복 배치',date,employee_id:person.id,message:`${date} ${person.name}: 여러 근무에 배치됨`});return}
    if(slot){const cell=[where,shift,slot].join('|'),old=bySlot.get(cell);if(old&&old!==key){issues.push({type:'중복 근무 칸',date,message:`${date} ${where} ${shift}${slot}: 여러 직원이 배치됨`});return}bySlot.set(cell,key)}
    byPerson.set(key,entry);places[where].push(entry);
@@ -31,8 +31,9 @@ function buildMonthlyRoster({month,staff,external=[],attendance=[],support=[],we
    if(!parent||String(parent.employee_id)===String(o.employee_id))continue;
    const p=byId.get(String(parent.employee_id)),details=p?attendanceDetails(attendance,date,p.id):[];if(!p||!details.length)continue;
    const existing=byPerson.get('staff:'+p.id);if(existing&&existing.workplace===o.workplace&&!existing.support&&existing.shift==='주간')places[o.workplace]=places[o.workplace].filter(x=>x!==existing);
-   places[o.workplace].push({date,employee_id:p.id,external_id:null,name:p.name,base:p.base||null,workplace:o.workplace,shift:o.shift,slot:Number(o.slot),support:false,annotationOnly:true,absenceOnly:true,attendance:attendanceLabel(attendance,date,p.id),attendanceDetails:details});
+   places[o.workplace].push({date,employee_id:p.id,external_id:null,name:p.name,employee_no:p.employee_no||null,base:p.base||null,workplace:o.workplace,shift:o.shift,slot:Number(o.slot),support:false,annotationOnly:true,absenceOnly:true,attendance:attendanceLabel(attendance,date,p.id),attendanceDetails:details});
   }
+  for(const entries of Object.values(places))entries.sort((a,b)=>{const x=String(a.employee_no||''),y=String(b.employee_no||'');return (!x)-(!y)||x.localeCompare(y,'ko',{numeric:true})});
   const holidayInfo=holidays.get(date),isPublicHoliday=!!holidayInfo&&(weekday!==6||(holidayInfo.auto_saturday===false&&!!holidayInfo.label&&holidayInfo.label!=='토요일'));days.push({date,weekday,holiday,holidayLabel:holidayInfo?.label||'',isPublicHoliday,places});
  }
  return {month,days,issues};
