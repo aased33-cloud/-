@@ -94,3 +94,7 @@ input.plan-slot{width:100%;min-width:0;text-align:center;font:inherit;background
 .registration-actions{margin:8px 0}#registration-feedback:empty{min-height:0}.registration-calendar+h3,.registration-day-detail h3{margin:8px 0}
 .roster-weekly-input{display:block;width:100%;min-width:0;box-sizing:border-box;border:1px solid #a5c8e5;border-radius:3px;padding:3px 1px;font:inherit;text-align:center;background:#fff;color:#153d62}
 .roster-weekly-input:focus{outline:2px solid #176cc0;outline-offset:1px}
+
+/* 주 담당 이름은 입력칸에 한 번만 표시하고, 상세 버튼에는 부가 정보만 표시합니다. */
+.roster-weekly-input.roster-weekly-leave{color:#1756b2;font-weight:700}.roster-weekly-input.roster-weekly-support{color:#c00069;font-weight:700}
+.roster-person.roster-detail-only{min-height:16px;padding:0 2px;color:#3b6f9e}.roster-person.roster-detail-only.roster-leave{color:#1756b2}.roster-person.roster-detail-only.roster-support{color:#c00069}
