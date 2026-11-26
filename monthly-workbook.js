@@ -2,12 +2,14 @@
 const ExcelJS=require('exceljs'),JSZip=require('jszip'),path=require('node:path');
 const template=path.join(__dirname,'templates','blank-roster.xlsx');
 const {shiftRows,compose,color}=require('./public/roster-layout');
-const textColors={normal:'FF20242E',leave:'FFC02636',support:'FF1756B2'};
+const textColors={normal:'FF20242E',leave:'FF1756B2',support:'FFC00069'};
 function setEntries(cell,entries){
  const colors=entries.map(color);
  if(!entries.length){cell.value=null;return}
- if(colors.every(c=>c===colors[0])){cell.value=entries.map(compose).join(', ');cell.font={...cell.font,color:{argb:textColors[colors[0]]}}}
- else{const base={...cell.font};cell.value={richText:entries.flatMap((e,i)=>[...(i?[{font:{...base,color:{argb:'FF20242E'}},text:', '}]:[]),{font:{...base,color:{argb:textColors[color(e)]}},text:compose(e)}])}}
+ // ExcelJS shares style objects between template cells; isolate each edited cell.
+ cell.style=structuredClone(cell.style);
+ if(colors.every(c=>c===colors[0])){cell.value=entries.map(compose).join(', ');cell.font={...cell.font,color:{argb:textColors[colors[0]]},...(colors[0]!=='normal'?{bold:true}:{})}}
+ else{const base={...cell.font};cell.value={richText:entries.flatMap((e,i)=>[...(i?[{font:{...base,color:{argb:'FF20242E'}},text:', '}]:[]),{font:{...base,color:{argb:textColors[color(e)]},...(color(e)!=='normal'?{bold:true}:{})},text:compose(e)}])}}
  cell.alignment={...cell.alignment,vertical:'middle',wrapText:true};
  // The template has fixed row heights; expand a row when several names or
  // attendance details would otherwise be clipped in an Excel viewer.
@@ -47,6 +49,8 @@ async function makeWorkbook(roster){
  if(a!==origA){const name=origA.name;wb.removeWorksheet(origA.id);a.name=name}if(b!==origB){const name=origB.name;wb.removeWorksheet(origB.id);b.name=name}
  // Recreate in original sheet order when only the first sheet was expanded.
  if(wb.worksheets[0]!==a){a.orderNo=0;b.orderNo=1}
+ // The template's second Jeongdaun line is blank. Added support rows remain visible.
+ for(let v=0;v<3;v++)a.getRow(mapA(22+v*23)).hidden=true;
  a.getCell('A1').value=`${year}년 ${month}월 근무편성표(하림·싱그린·정다운·중앙축산)`;b.getCell('A1').value=`${year}년 ${month}월 근무편성표(동우·앤에프)`;
  for(let week=0;week<6;week++)for(let day=0;day<7;day++){const vertical=Math.floor(week/2),side=week%2,letter=['일','월','화','수','목','금','토'][day];a.getCell(mapA(3+vertical*23),(side?14:4)+day).value=letter;b.getCell(mapB(3+vertical*11),(side?20:3)+day*2).value=letter}
  for(const day of roster.days){const n=Number(day.date.slice(8)),idx=Math.floor((first+n-1)/7),side=idx%2,vertical=Math.floor(idx/2),weekday=day.weekday,rowA=vertical*23,colA=(side?14:4)+weekday,rowB=vertical*11,colB=(side?20:3)+weekday*2;

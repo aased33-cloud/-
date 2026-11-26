@@ -95,7 +95,10 @@ module.exports=function attachShifts(app,pool,user,admin,wrap){
    const parent=(await c.query('SELECT employee_id FROM weekly_shift_assignments WHERE workplace=$1 AND shift=$2 AND week_start=$3::date AND slot=$4',[q.workplace,q.shift,q.start,slot])).rows[0];
    if(!parent){await c.query('ROLLBACK');return res.status(400).json({error:'먼저 주 담당자를 지정하세요.'})}
    const old=(await c.query('SELECT employee_id FROM weekly_shift_overrides WHERE workplace=$1 AND shift=$2 AND week_start=$3::date AND slot=$4 AND work_date=$5::date',[q.workplace,q.shift,q.start,slot,day])).rows[0];
+   const clearSupport=req.body.clear_previous_support_employee_id==null?null:Number(req.body.clear_previous_support_employee_id),previousEffective=old?old.employee_id:parent.employee_id;
+   if(clearSupport!==null&&(!Number.isSafeInteger(clearSupport)||clearSupport<1||Number(previousEffective)!==clearSupport)){await c.query('ROLLBACK');return res.status(409).json({error:'기존 지원자가 변경됐습니다. 화면을 새로고침해 주세요.'})}
    const resetToDefault=reset||(!reset&&id!==null&&String(parent.employee_id)===String(id));
+   if(resetToDefault&&(await c.query('SELECT 1 FROM daily_workplace_support WHERE work_date=$1::date AND employee_id=$2 AND workplace<>$3',[day,parent.employee_id,q.workplace])).rowCount){await c.query('ROLLBACK');return res.status(409).json({error:'기본 담당자가 이 날짜에 다른 작업장을 지원하고 있습니다. 먼저 교환이나 지원을 되돌려 주세요.'})}
    if(resetToDefault&&await hasDayOverlap(c,q,slot,parent.employee_id,day)){await c.query('ROLLBACK');return res.status(409).json({error:'기본 담당자가 해당 날짜의 다른 근무에 이미 배치되어 있습니다.'})}
    if(resetToDefault&&await holidayPlanConflict(c,q,slot,parent.employee_id,day)){await c.query('ROLLBACK');return res.status(409).json({error:'해당 날짜의 휴일근무 배치와 충돌합니다.'})}
    if(!resetToDefault&&id!==null){
@@ -110,6 +113,7 @@ module.exports=function attachShifts(app,pool,user,admin,wrap){
    }
    if(resetToDefault)await c.query('DELETE FROM weekly_shift_overrides WHERE workplace=$1 AND shift=$2 AND week_start=$3::date AND slot=$4 AND work_date=$5::date',[q.workplace,q.shift,q.start,slot,day]);
    else await c.query('INSERT INTO weekly_shift_overrides(workplace,shift,week_start,slot,work_date,employee_id) VALUES($1,$2,$3::date,$4,$5::date,$6) ON CONFLICT(workplace,shift,week_start,slot,work_date) DO UPDATE SET employee_id=EXCLUDED.employee_id,updated_at=now()',[q.workplace,q.shift,q.start,slot,day,id]);
+   if(clearSupport!==null&&Number(previousEffective)!==Number(resetToDefault?parent.employee_id:id))await c.query('DELETE FROM daily_workplace_support WHERE work_date=$1::date AND employee_id=$2 AND workplace=$3',[day,clearSupport,q.workplace]);
    await c.query('INSERT INTO audit_log(actor_id,action,before_data,after_data) VALUES($1,$2,$3,$4)',[req.user.id,'날짜별 대체 변경',JSON.stringify({workplace:q.workplace,shift:q.shift,week_start:q.start,slot,work_date:day,override:old?{employee_id:old.employee_id}:null}),JSON.stringify({workplace:q.workplace,shift:q.shift,week_start:q.start,slot,work_date:day,override:resetToDefault?null:{employee_id:id}})]);
    await c.query('COMMIT');res.json({ok:true});
   }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}

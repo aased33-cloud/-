@@ -13,7 +13,7 @@ let dismissNavigation=null;
 function shell(content){
  if(dismissNavigation)document.removeEventListener('click',dismissNavigation);
  const attendance=[['calendar','달력'],['registration','근태 등록'],['holidays','휴일근무 가능 여부'],['summary','직원별 현황']];
- const scheduling=[['workplaces','작업장 배치'],['weekly','주별 담당자'],['holiday-plan','휴일근무 배치'],['roster','월 근무표']];
+ const scheduling=[['workplaces','작업장 배치'],['holiday-plan','휴일근무 배치'],['roster','월 근무표']];
  const management=[['employees','직원 관리'],['settings','마감일·휴일 설정'],['audit','변경 이력']];
  const groups=[['attendance','근태',attendance],...(user.role==='admin'?[['scheduling','근무표',scheduling],['management','관리',management]]:[])];
  const active=key=>key==='registration'?view.startsWith('registration'):view===key;
