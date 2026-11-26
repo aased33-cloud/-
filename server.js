@@ -24,6 +24,7 @@ require('./shift-routes')(app,pool,user,admin,wrap);
 require('./holiday-plan-routes')(app,pool,user,admin,wrap);
 require('./support-routes')(app,pool,user,admin,wrap);
 require('./roster-routes')(app,pool,user,admin,wrap);
+require('./auto-assignment-routes')(app,pool,user,admin,wrap);
 async function attendanceClosed(c,item){for(const m of R.months(item.start_date,item.end_date)){const r=await c.query("SELECT start_date::text AS s, deadline_date::text AS d FROM monthly_deadlines WHERE kind='attendance' AND month=$1",[m+'-01']);if(!r.rows[0]?.s||R.seoulDate()<r.rows[0].s||R.seoulDate()>r.rows[0].d)return true}return false}
 const selectAttendance=`SELECT a.id,a.employee_id,a.type,to_char(a.start_date,'YYYY-MM-DD') AS start_date,to_char(a.end_date,'YYYY-MM-DD') AS end_date,to_char(a.start_time,'HH24:MI') AS start_time,to_char(a.end_time,'HH24:MI') AS end_time,a.note,e.name,e.employee_no FROM attendance a JOIN employees e ON e.id=a.employee_id`;
 app.get('/api/attendance',user,wrap(async(req,res)=>{const month=String(req.query.month||'');if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return res.status(400).json({error:'월을 확인하세요.'});const {rows}=await pool.query(`${selectAttendance} WHERE a.start_date < ($1::date + interval '1 month') AND a.end_date >= $1::date ORDER BY a.start_date,e.name`,[month+'-01']);res.json(rows)}));

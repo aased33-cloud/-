@@ -119,3 +119,4 @@ module.exports=function attachShifts(app,pool,user,admin,wrap){
   }catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
  }));
 };
+module.exports.autoCandidates=candidates;
