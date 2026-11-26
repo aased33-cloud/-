@@ -87,7 +87,7 @@ test('admin can check and download the filled workbook without production data',
  await request(app).get('/api/monthly-roster/check?month=2026-12').set('x-role','employee').expect(403);
  const check=await request(app).get('/api/monthly-roster/check?month=2026-12').expect(200);assert.equal(check.body.issues.length,0);assert(check.body.warnings.some(w=>w.type==='휴일 필요 인원 부족'));
  const resp=await request(app).get('/api/monthly-roster/export?month=2026-12').buffer(true).parse((res,cb)=>{const parts=[];res.on('data',x=>parts.push(x));res.on('end',()=>cb(null,Buffer.concat(parts)))}).expect(200);
- const ExcelJS=require('exceljs'),book=new ExcelJS.Workbook();await book.xlsx.load(resp.body);assert.equal(book.worksheets.length,2);assert(Array.from({length:11},(_,i)=>book.worksheets[0].getCell('F'+(i+6)).value).includes('관리자(동우)'));assert.equal(book.worksheets[1].getCell('G5').value,'관리자');assert.equal(book.worksheets[0].getCell('J6').value,'관리자');
+ const ExcelJS=require('exceljs'),book=new ExcelJS.Workbook();await book.xlsx.load(resp.body);assert.equal(book.worksheets.length,2);assert(Array.from({length:11},(_,i)=>book.worksheets[0].getCell('F'+(i+6)).value).includes('관리자(동우 지원)'));assert.equal(book.worksheets[1].getCell('G5').value,'관리자(지원)');assert.equal(book.worksheets[0].getCell('J6').value,'관리자');
  }finally{await db.close()}});
 test('roster check warns when attendance is added after weekly night assignment',async()=>{const {db,app}=await setup();try{
  const weekly={month:'2026-12',workplace:'하림',shift:'야간',week_start:'2026-11-30',slot:1,employee_id:1};await request(app).put('/api/weekly-shift').send(weekly).expect(200);
@@ -160,4 +160,90 @@ test('removing holiday support clears both related records in one transaction',a
  await request(app).put('/api/holiday-plan/assignment').send({...entry,employee_id:null,external_id:null,clear_support:true}).expect(200);
  assert.equal(Number((await db.query("SELECT count(*) AS n FROM daily_workplace_support WHERE employee_id=1 AND work_date='2026-12-05'")).rows[0].n),0);
  assert.equal(Number((await db.query("SELECT count(*) AS n FROM holiday_plan_assignments WHERE employee_id=1 AND work_date='2026-12-05'")).rows[0].n),0);
+ }finally{await db.close()}});
+
+test('weekday workplace swap is atomic and preserves original assignments',async()=>{const {db,app}=await setup();try{
+ await db.exec("UPDATE monthly_workplace_assignments SET workplace='동우' WHERE month='2026-12-01' AND employee_id=2");
+ const body={date:'2026-12-07',employee_id:1,other_employee_id:2,shifts:{}};
+ await request(app).post('/api/workplace-support/swap').set('x-role','employee').send(body).expect(403);
+ await request(app).post('/api/workplace-support/swap').send(body).expect(200);
+ const r=await request(app).get('/api/monthly-roster/preview?month=2026-12').expect(200),d=r.body.days.find(x=>x.date===body.date);
+ assert(d.places['동우'].some(x=>Number(x.employee_id)===1&&x.support&&!x.annotationOnly));assert(d.places['하림'].some(x=>Number(x.employee_id)===2&&x.support&&!x.annotationOnly));
+ assert(d.places['하림'].some(x=>Number(x.employee_id)===1&&x.annotationOnly));assert(d.places['동우'].some(x=>Number(x.employee_id)===2&&x.annotationOnly));
+ const base=await db.query("SELECT workplace FROM monthly_workplace_assignments WHERE month='2026-12-01' ORDER BY employee_id");assert.deepEqual(base.rows.map(x=>x.workplace),['하림','동우','하림']);
+ await request(app).post('/api/workplace-support/swap').send(body).expect(200);
+ assert.equal((await db.query("SELECT count(*)::int AS n FROM daily_workplace_support WHERE work_date='2026-12-07'")).rows[0].n,0);
+ await request(app).post('/api/workplace-support/swap').send({...body,date:'2026-12-05'}).expect(409);
+ }finally{await db.close()}});
+
+test('changing a weekday support worker preserves the old worker if validation fails',async()=>{const {db,app}=await setup();try{
+ await db.exec("UPDATE monthly_workplace_assignments SET workplace='동우' WHERE employee_id IN (2,3) AND month='2026-12-01'");
+ const original={date:'2026-12-07',employee_id:2,workplace:'하림',shift:null};await request(app).put('/api/workplace-support').send(original).expect(200);
+ await db.exec("INSERT INTO attendance(employee_id,type,start_date,end_date,note) VALUES(3,'연차','2026-12-07','2026-12-07','')");
+ await request(app).put('/api/workplace-support').send({...original,employee_id:3,replace_employee_id:2}).expect(409);
+ let rows=(await db.query("SELECT employee_id FROM daily_workplace_support WHERE work_date='2026-12-07'")).rows;assert.deepEqual(rows.map(x=>Number(x.employee_id)),[2]);
+ await db.exec('DELETE FROM attendance WHERE employee_id=3');await request(app).put('/api/workplace-support').send({...original,employee_id:3,replace_employee_id:2}).expect(200);
+ rows=(await db.query("SELECT employee_id FROM daily_workplace_support WHERE work_date='2026-12-07'")).rows;assert.deepEqual(rows.map(x=>Number(x.employee_id)),[3]);
+ }finally{await db.close()}});
+
+test('holiday swap validates both workers and changes both assignments atomically',async()=>{const {db,app}=await setup();try{
+ await db.exec("UPDATE monthly_workplace_assignments SET workplace='동우' WHERE month='2026-12-01' AND employee_id=2; UPDATE holiday_preferences SET status='available' WHERE employee_id=2");
+ const date='2026-12-05',body={date,employee_id:1,other_employee_id:2};
+ await request(app).put('/api/holiday-plan/assignment').send({month:'2026-12',date,workplace:'하림',shift:'주간',slot:2,employee_id:1}).expect(200);
+ await request(app).put('/api/holiday-plan/assignment').send({month:'2026-12',date,workplace:'동우',shift:'주간',slot:1,employee_id:2}).expect(200);
+ await db.exec("UPDATE holiday_preferences SET night_status='unavailable',status='unavailable' WHERE employee_id=2");
+ let r=await request(app).post('/api/workplace-support/swap').send(body).expect(409);assert(r.body.warning);
+ const before=(await db.query("SELECT workplace,employee_id FROM holiday_plan_assignments WHERE work_date='2026-12-05' ORDER BY workplace")).rows;assert.deepEqual(before.map(x=>Number(x.employee_id)),[2,1]);
+ await request(app).post('/api/workplace-support/swap').send({...body,confirm_unavailable:true}).expect(200);
+ const after=(await db.query("SELECT workplace,employee_id FROM holiday_plan_assignments WHERE work_date='2026-12-05' ORDER BY workplace")).rows;assert.deepEqual(after.map(x=>Number(x.employee_id)),[1,2]);
+ const preview=await request(app).get('/api/monthly-roster/preview?month=2026-12').expect(200),d=preview.body.days.find(x=>x.date===date);assert(d.places['하림'].some(x=>Number(x.employee_id)===2&&x.support&&!x.annotationOnly));assert(d.places['동우'].some(x=>Number(x.employee_id)===1&&x.support&&!x.annotationOnly));
+ }finally{await db.close()}});
+
+test('weekday swap uses a date override for a weekly duty and preserves the weekly assignment',async()=>{const {db,app}=await setup();try{
+ await db.exec("UPDATE monthly_workplace_assignments SET workplace='동우' WHERE month='2026-12-01' AND employee_id=2");
+ await request(app).put('/api/weekly-shift').send({month:'2026-12',workplace:'하림',shift:'조출',week_start:'2026-12-07',slot:1,employee_id:1}).expect(200);
+ const body={date:'2026-12-07',employee_id:1,other_employee_id:2};await request(app).post('/api/workplace-support/swap').send(body).expect(200);
+ const w=(await db.query("SELECT employee_id FROM weekly_shift_assignments WHERE workplace='하림' AND shift='조출' AND week_start='2026-12-07'")).rows;assert.equal(Number(w[0].employee_id),1);
+ const o=(await db.query("SELECT employee_id FROM weekly_shift_overrides WHERE workplace='하림' AND shift='조출' AND work_date='2026-12-07'")).rows;assert.equal(Number(o[0].employee_id),2);
+ const r=await request(app).get('/api/monthly-roster/preview?month=2026-12').expect(200),d=r.body.days.find(x=>x.date===body.date);assert(d.places['하림'].some(x=>Number(x.employee_id)===2&&!x.annotationOnly));assert(d.places['동우'].some(x=>Number(x.employee_id)===1&&!x.annotationOnly));
+ assert(r.body.days.find(x=>x.date==='2026-12-08').places['하림'].some(x=>Number(x.employee_id)===1&&x.shift==='조출'));
+ }finally{await db.close()}});
+
+test('weekday swap rejects an ineligible night replacement and rolls back',async()=>{const {db,app}=await setup();try{
+ await db.exec("UPDATE monthly_workplace_assignments SET workplace='동우' WHERE month='2026-12-01' AND employee_id=2");
+ await request(app).put('/api/weekly-shift').send({month:'2026-12',workplace:'하림',shift:'야간',week_start:'2026-12-07',slot:1,employee_id:1}).expect(200);
+ await request(app).post('/api/workplace-support/swap').send({date:'2026-12-07',employee_id:1,other_employee_id:2}).expect(409);
+ assert.equal((await db.query("SELECT count(*)::int n FROM weekly_shift_overrides WHERE work_date='2026-12-07'")).rows[0].n,0);
+ assert.equal((await db.query("SELECT count(*)::int n FROM daily_workplace_support WHERE work_date='2026-12-07'")).rows[0].n,0);
+ }finally{await db.close()}});
+
+test('changing a holiday support worker leaves the original assignment intact on failure',async()=>{const {db,app}=await setup();try{
+ await db.exec("UPDATE monthly_workplace_assignments SET workplace='동우' WHERE month='2026-12-01' AND employee_id IN (1,2); UPDATE holiday_preferences SET status='available' WHERE employee_id=2");
+ const date='2026-12-05',assignment={month:'2026-12',date,workplace:'하림',shift:'주간',slot:2,employee_id:1};
+ await request(app).put('/api/workplace-support').send({date,employee_id:1,workplace:'하림'}).expect(200);
+ await request(app).put('/api/holiday-plan/assignment').send(assignment).expect(200);
+ await db.exec("UPDATE holiday_preferences SET status='unavailable' WHERE employee_id=2");
+ const body={...assignment,employee_id:2,replace_support_employee_id:1};const r=await request(app).put('/api/holiday-plan/assignment').send(body).expect(409);assert(r.body.warning);
+ assert.equal(Number((await db.query("SELECT employee_id FROM holiday_plan_assignments WHERE work_date='2026-12-05'")).rows[0].employee_id),1);
+ await request(app).put('/api/holiday-plan/assignment').send({...body,confirm_unavailable:true}).expect(200);
+ assert.equal(Number((await db.query("SELECT employee_id FROM holiday_plan_assignments WHERE work_date='2026-12-05'")).rows[0].employee_id),2);
+ assert.deepEqual((await db.query("SELECT employee_id FROM daily_workplace_support WHERE work_date='2026-12-05'")).rows.map(x=>Number(x.employee_id)),[2]);
+ }finally{await db.close()}});
+
+test('holiday swap moves a weekly night duty only for the selected date',async()=>{const {db,app}=await setup();try{
+ await db.exec("UPDATE monthly_workplace_assignments SET workplace='앤에프' WHERE month='2026-12-01' AND employee_id=1; UPDATE monthly_workplace_assignments SET workplace='동우' WHERE month='2026-12-01' AND employee_id=2; UPDATE holiday_preferences SET status='available',night_status='allowed' WHERE employee_id=2");
+ await db.exec("INSERT INTO holiday_dates(holiday_date,label) VALUES('2026-12-04','휴일'); INSERT INTO holiday_preferences(holiday_id,employee_id,status,night_status) SELECT id,e,'available','allowed' FROM holiday_dates CROSS JOIN (VALUES(1),(2)) v(e) WHERE holiday_date='2026-12-04'");
+ const date='2026-12-04';await request(app).put('/api/weekly-shift').send({month:'2026-12',workplace:'동우',shift:'야간',week_start:'2026-11-29',slot:1,employee_id:2}).expect(200);
+ await request(app).put('/api/holiday-plan/assignment').send({month:'2026-12',date,workplace:'앤에프',shift:'주간',slot:1,employee_id:1}).expect(200);
+ await request(app).post('/api/workplace-support/swap').send({date,employee_id:1,other_employee_id:2}).expect(200);
+ assert.equal(Number((await db.query("SELECT employee_id FROM weekly_shift_assignments WHERE workplace='동우' AND shift='야간'")).rows[0].employee_id),2);
+ assert.equal(Number((await db.query("SELECT employee_id FROM weekly_shift_overrides WHERE work_date='2026-12-04' AND workplace='동우' AND shift='야간'")).rows[0].employee_id),1);
+ assert.equal(Number((await db.query("SELECT employee_id FROM holiday_plan_assignments WHERE work_date='2026-12-04' AND workplace='앤에프'")).rows[0].employee_id),2);
+ }finally{await db.close()}});
+
+test('weekday night swap allows an otherwise eligible worker with an outing',async()=>{const {db,app}=await setup();try{
+ await db.exec("UPDATE monthly_workplace_assignments SET workplace='앤에프' WHERE month='2026-12-01' AND employee_id=1; UPDATE monthly_workplace_assignments SET workplace='동우' WHERE month='2026-12-01' AND employee_id=2; INSERT INTO attendance(employee_id,type,start_date,end_date,start_time,end_time,note) VALUES(1,'외출','2026-12-07','2026-12-07','13:00','14:00','')");
+ await request(app).put('/api/weekly-shift').send({month:'2026-12',workplace:'동우',shift:'야간',week_start:'2026-12-06',slot:1,employee_id:2}).expect(200);
+ await request(app).post('/api/workplace-support/swap').send({date:'2026-12-07',employee_id:1,other_employee_id:2}).expect(200);
+ assert.equal(Number((await db.query("SELECT employee_id FROM weekly_shift_overrides WHERE work_date='2026-12-07' AND workplace='동우' AND shift='야간'")).rows[0].employee_id),1);
  }finally{await db.close()}});

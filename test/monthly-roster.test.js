@@ -10,7 +10,7 @@ test('xlsx preserves both workbook layouts, Friday time, support and a six-week 
  const weekly=[{workplace:'동우',shift:'야간',week_start:'2026-04-26',slot:2,employee_id:2}],support=[{date:'2026-05-04',employee_id:1,workplace:'동우'}];
  const r=buildMonthlyRoster({month:'2026-05',staff,support,weekly,friday:[{week_start:'2026-04-26',slot:1}]});
  const bytes=await makeWorkbook(r),w=new ExcelJS.Workbook();await w.xlsx.load(bytes);assert.equal(w.worksheets.length,2);assert(w.worksheets[0].model.merges.length>20);assert(w.worksheets[1].model.merges.length>400);for(let day=1;day<=31;day++){const idx=Math.floor((5+day-1)/7),weekday=(5+day-1)%7,row=Math.floor(idx/2)*23,col=(idx%2?14:4)+weekday;assert.equal(w.worksheets[0].getCell(4+row,col).value,day)}
- assert.equal(w.worksheets[0].getCell('O6').value,'가상가(동우)');assert.equal(w.worksheets[1].getCell('V5').value,'가상가');
+ assert.equal(w.worksheets[0].getCell('O6').value,'가상가(동우 지원)');assert.equal(w.worksheets[1].getCell('V5').value,'가상가(지원)');
  assert.equal(w.worksheets[0].getCell('N50').value,31);assert.equal(w.worksheets[1].getCell('M11').value,'22:30 ~ 07:30');assert.equal(w.worksheets[1].getCell('N11').value,'가상나');
 });
 test('workbook dates and weekday headings remain correct across different month layouts',async()=>{
@@ -21,7 +21,7 @@ test('attendance and support are displayed together with leave taking color prec
  const layout=require('../public/roster-layout');
  const r=buildMonthlyRoster({month:'2026-12',staff,support:[{date:'2026-12-01',employee_id:1,workplace:'동우'}],attendance:[{id:12,employee_id:1,type:'조퇴',start_date:'2026-12-01',end_date:'2026-12-01',start_time:'15:00',end_time:'17:00',note:'상세'}, {id:13,employee_id:1,type:'외출',start_date:'2026-12-01',end_date:'2026-12-01',start_time:'12:00',end_time:'13:00'}]});
  const own=r.days[0].places['하림'].find(x=>x.employee_id===1),dest=r.days[0].places['동우'].find(x=>x.employee_id===1);
- assert.equal(layout.compose(own),'가상가(동우, 조퇴 2h, 외출 1h)');assert.equal(layout.compose(dest),'가상가(조퇴 2h, 외출 1h)');assert.equal(layout.color(own),'leave');assert.equal(dest.attendanceDetails[0].note,'상세');
+ assert.equal(layout.compose(own),'가상가(동우 지원, 조퇴 2h, 외출 1h)');assert.equal(layout.compose(dest),'가상가(지원, 조퇴 2h, 외출 1h)');assert.equal(layout.color(own),'support');assert.equal(dest.attendanceDetails[0].note,'상세');
 });
 
 test('workbook retains all names and distinguishes mixed support and attendance colors',async()=>{
@@ -41,8 +41,50 @@ test('singgreen support uses the selected time and extra workers have separate w
  const people=[{id:1,name:'8시지원',base:'하림'},{id:2,name:'10시지원',base:'동우'},{id:3,name:'싱그린직원',base:'싱그린'},{id:4,name:'앤에프직원1',base:'앤에프'},{id:5,name:'앤에프직원2',base:'앤에프'},{id:6,name:'앤에프지원',base:'동우'}];
  const support=[{date:'2026-12-01',employee_id:1,workplace:'싱그린',shift:'조출'},{date:'2026-12-01',employee_id:2,workplace:'싱그린',shift:'후출'},{date:'2026-12-01',employee_id:6,workplace:'앤에프'}];
  const roster=buildMonthlyRoster({month:'2026-12',staff:people,support});const w=new ExcelJS.Workbook();await w.xlsx.load(await makeWorkbook(roster));const a=w.worksheets[0],b=w.worksheets[1];
- const matches=(s,col,name)=>s.getColumn(col).values.map((v,i)=>({v,i})).filter(x=>x.v===name&&x.i>=5&&x.i<=25).map(x=>x.i);
+ const matches=(s,col,name)=>s.getColumn(col).values.map((v,i)=>({v,i})).filter(x=>(x.v===name||x.v===name+'(지원)')&&x.i>=5&&x.i<=25).map(x=>x.i);
  const early=matches(a,6,'8시지원'),late=matches(a,6,'10시지원'),base=matches(a,6,'싱그린직원');assert.equal(early.length,1);assert.equal(late.length,1);assert.equal(base.length,1);assert.notEqual(early[0],base[0]);assert(late[0]>Math.max(early[0],base[0]));
  const nf=['앤에프직원1','앤에프직원2','앤에프지원'].map(n=>matches(b,7,n)[0]);assert.equal(new Set(nf).size,3);for(const i of nf)assert(i>=12&&i<=14);
  assert(a.model.merges.length>20);assert(b.model.merges.length>400);assert.equal(a.getCell(4,6).value,1);assert.equal(b.getCell(4,7).value,1);
+});
+
+test('exported sheets write Excel worksheet properties in the required order',async()=>{
+ const {makeWorkbook}=require('../monthly-workbook'),JSZip=require('jszip');
+ for(const staff of [[],Array.from({length:20},(_,i)=>({id:i+1,name:'테스트'+i,base:'하림'}))]){
+  const zip=await JSZip.loadAsync(await makeWorkbook(buildMonthlyRoster({month:'2026-12',staff})));
+  const files=Object.keys(zip.files).filter(n=>/^xl\/worksheets\/sheet\d+\.xml$/.test(n));assert.equal(files.length,2);
+  for(const name of files){const xml=await zip.file(name).async('string'),props=xml.match(/<sheetPr(?:\s[^>]*)?>([\s\S]*?)<\/sheetPr>/)?.[1]||'';if(props.includes('<outlinePr')&&props.includes('<pageSetUpPr'))assert(props.indexOf('<outlinePr')<props.indexOf('<pageSetUpPr'),name)}
+ }
+});
+
+test('roster blue highlight uses four hours of daily attendance without double counting overlaps',()=>{
+ const {hasFourHourAttendance}=require('../public/roster-layout');
+ const time=(start_time,end_time)=>({start_time,end_time});
+ assert.equal(hasFourHourAttendance([time('09:00','12:59')]),false);
+ assert.equal(hasFourHourAttendance([time('09:00','13:00')]),true);
+ assert.equal(hasFourHourAttendance([time('09:00','11:00'),time('13:00','15:00')]),true);
+ assert.equal(hasFourHourAttendance([time('09:00','12:00'),time('11:00','13:00')]),true);
+ assert.equal(hasFourHourAttendance([time('09:00','11:00'),time('10:00','12:00')]),false);
+ assert.equal(hasFourHourAttendance([{start_time:null,end_time:null}]),true);
+ assert.equal(hasFourHourAttendance([]),false);
+});
+
+test('daily weekly substitute preserves the original worker leave beside the replacement',()=>{
+ const staff=[{id:1,name:'원담당',base:'하림'},{id:2,name:'대체자',base:'싱그린'}],weekly=[{workplace:'하림',shift:'조출',week_start:'2026-12-07',slot:1,employee_id:1}],overrides=[{workplace:'하림',shift:'조출',week_start:'2026-12-07',slot:1,work_date:'2026-12-08',employee_id:2}],attendance=[{employee_id:1,type:'연차',start_date:'2026-12-08',end_date:'2026-12-08'}],r=buildMonthlyRoster({month:'2026-12',staff,weekly,overrides,attendance}),day=r.days.find(x=>x.date==='2026-12-08'),rows=require('../public/roster-layout').shiftRows(day.places['하림'],'하림'),early=rows.get(5);
+ assert(early.some(x=>x.name==='원담당'&&x.absenceOnly&&x.attendanceDetails[0].type==='연차'));assert(early.some(x=>x.name==='대체자'&&x.support));assert.equal(day.places['하림'].filter(x=>x.name==='원담당').length,1);
+});
+
+test('jeongdaun support and original worker remain in separate Excel cells',async()=>{
+ const {makeWorkbook}=require('../monthly-workbook'),ExcelJS=require('exceljs');const staff=[{id:1,name:'정다운원',base:'정다운'},{id:2,name:'하림지원',base:'하림'}],support=[{date:'2026-12-01',employee_id:2,workplace:'정다운'}],r=buildMonthlyRoster({month:'2026-12',staff,support}),w=new ExcelJS.Workbook();await w.xlsx.load(await makeWorkbook(r));const a=w.worksheets[0],values=[a.getCell('F21').value,a.getCell('F22').value];assert(values.includes('정다운원'));assert(values.includes('하림지원(지원)'));assert.equal(a.getRow(21).hidden,false);assert.equal(a.getRow(22).hidden,false);assert.equal(a.getRow(23).hidden,true);
+});
+
+
+test('excel colors match four-hour leave and support display',async()=>{
+ const {makeWorkbook}=require('../monthly-workbook'),ExcelJS=require('exceljs'),staff=[{id:1,name:'근태4시간',base:'하림'},{id:2,name:'지원자',base:'동우'}];
+ const r=buildMonthlyRoster({month:'2026-12',staff,attendance:[{employee_id:1,type:'조퇴',start_date:'2026-12-01',end_date:'2026-12-01',start_time:'13:00',end_time:'17:00'}],support:[{date:'2026-12-01',employee_id:2,workplace:'하림'}]}),w=new ExcelJS.Workbook();await w.xlsx.load(await makeWorkbook(r));const cells=w.worksheets[0].getColumn(6).values.map((v,i)=>({v,i}));
+ for(const [text,color] of [['근태4시간','FF1756B2'],['지원자','FFC00069']]){const hit=cells.find(x=>typeof x?.v==='string'&&x.v.includes(text));assert(hit,text);const font=w.worksheets[0].getCell(hit.i,6).font;assert.equal(font.color.argb,color);assert.equal(font.bold,true)}
+});
+
+
+test('jeongdaun has one visible default Excel row before extra support',async()=>{
+ const {makeWorkbook}=require('../monthly-workbook'),ExcelJS=require('exceljs'),w=new ExcelJS.Workbook();await w.xlsx.load(await makeWorkbook(buildMonthlyRoster({month:'2026-12',staff:[]})));const a=w.worksheets[0];assert.equal(a.getRow(21).hidden,false);assert.equal(a.getRow(22).hidden,true);assert.equal(a.getRow(23).hidden,false);
 });

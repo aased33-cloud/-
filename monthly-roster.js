@@ -25,6 +25,14 @@ function buildMonthlyRoster({month,staff,external=[],attendance=[],support=[],we
    if(weekday>=1&&weekday<=5)for(const p of staff){if(!WORK.includes(p.base)||byPerson.has('staff:'+p.id))continue;const s=support.find(x=>x.date===date&&String(x.employee_id)===String(p.id));addActual(p,s?.workplace||p.base,s?.shift||'주간',null,'staff')}
   }
   for(const e of byPerson.values())if(e.employee_id){const s=support.find(x=>x.date===date&&String(x.employee_id)===String(e.employee_id));if(s&&s.workplace!==e.workplace)issues.push({type:'지원 충돌',date,employee_id:e.employee_id,message:`${date} ${e.name}: 지원과 근무 작업장이 다름`});if(e.support&&WORK.includes(e.base))places[e.base].push({...e,destination:e.workplace,workplace:e.base,shift:'주간',slot:null,annotationOnly:true})}
+  // Keep the original worker's leave visible at their weekly duty when a date substitute is used.
+  for(const o of overrides.filter(x=>x.work_date===date&&x.employee_id!==null)){
+   const parent=weekly.find(w=>w.workplace===o.workplace&&w.shift===o.shift&&w.week_start===o.week_start&&Number(w.slot)===Number(o.slot));
+   if(!parent||String(parent.employee_id)===String(o.employee_id))continue;
+   const p=byId.get(String(parent.employee_id)),details=p?attendanceDetails(attendance,date,p.id):[];if(!p||!details.length)continue;
+   const existing=byPerson.get('staff:'+p.id);if(existing&&existing.workplace===o.workplace&&!existing.support&&existing.shift==='주간')places[o.workplace]=places[o.workplace].filter(x=>x!==existing);
+   places[o.workplace].push({date,employee_id:p.id,external_id:null,name:p.name,base:p.base||null,workplace:o.workplace,shift:o.shift,slot:Number(o.slot),support:false,annotationOnly:true,absenceOnly:true,attendance:attendanceLabel(attendance,date,p.id),attendanceDetails:details});
+  }
   const holidayInfo=holidays.get(date),isPublicHoliday=!!holidayInfo&&(weekday!==6||(holidayInfo.auto_saturday===false&&!!holidayInfo.label&&holidayInfo.label!=='토요일'));days.push({date,weekday,holiday,holidayLabel:holidayInfo?.label||'',isPublicHoliday,places});
  }
  return {month,days,issues};

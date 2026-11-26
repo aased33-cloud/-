@@ -165,3 +165,28 @@ test('administrators can manage another employee registration while employees re
   await request(app).get('/api/night-registration').query({month:'2026-12',employee_id:3}).expect(400);
  }finally{await db.close()}
 });
+
+test('weekly substitute replacement safely clears linked daily support only after validation',async()=>{
+ const {db,app}=await setup();try{
+  await db.exec("UPDATE employees SET active=true WHERE id=3; INSERT INTO monthly_workplace_assignments(month,employee_id,workplace) VALUES('2026-12-01',1,'하림'),('2026-12-01',2,'싱그린'),('2026-12-01',3,'하림')");
+  const weekly={month:'2026-12',workplace:'하림',shift:'조출',week_start:'2026-12-07',slot:1};await request(app).put('/api/weekly-shift').send({...weekly,employee_id:1}).expect(200);
+  const override={...weekly,work_date:'2026-12-08',employee_id:2};await request(app).put('/api/weekly-shift/override').send(override).expect(200);
+  await db.exec("INSERT INTO daily_workplace_support(work_date,employee_id,workplace) VALUES('2026-12-08',2,'하림')");
+  await request(app).put('/api/weekly-shift/override').send({...override,employee_id:3,clear_previous_support_employee_id:1}).expect(409);
+  assert.equal((await db.query("SELECT count(*)::int n FROM daily_workplace_support WHERE employee_id=2")).rows[0].n,1);
+  await request(app).put('/api/weekly-shift/override').send({...override,employee_id:3,clear_previous_support_employee_id:2}).expect(200);
+  assert.equal((await db.query("SELECT count(*)::int n FROM daily_workplace_support WHERE employee_id=2")).rows[0].n,0);
+  assert.equal(Number((await db.query("SELECT employee_id FROM weekly_shift_overrides WHERE work_date='2026-12-08'")).rows[0].employee_id),3);
+ }finally{await db.close()}
+});
+
+test('restoring a weekly duty cannot silently conflict with a daily transfer',async()=>{
+ const {db,app}=await setup();try{
+  await db.exec("INSERT INTO monthly_workplace_assignments(month,employee_id,workplace) VALUES('2026-12-01',1,'하림'),('2026-12-01',2,'싱그린')");
+  const weekly={month:'2026-12',workplace:'하림',shift:'조출',week_start:'2026-12-07',slot:1};await request(app).put('/api/weekly-shift').send({...weekly,employee_id:1}).expect(200);
+  await request(app).put('/api/weekly-shift/override').send({...weekly,work_date:'2026-12-08',employee_id:2}).expect(200);
+  await db.exec("INSERT INTO daily_workplace_support(work_date,employee_id,workplace) VALUES('2026-12-08',1,'동우')");
+  await request(app).put('/api/weekly-shift/override').send({...weekly,work_date:'2026-12-08',employee_id:null,reset:true}).expect(409);
+  assert.equal(Number((await db.query("SELECT employee_id FROM weekly_shift_overrides WHERE work_date='2026-12-08'")).rows[0].employee_id),2);
+ }finally{await db.close()}
+});
