@@ -98,3 +98,7 @@ input.plan-slot{width:100%;min-width:0;text-align:center;font:inherit;background
 /* 주 담당 이름은 입력칸에 한 번만 표시하고, 상세 버튼에는 부가 정보만 표시합니다. */
 .roster-weekly-input.roster-weekly-leave{color:#1756b2;font-weight:700}.roster-weekly-input.roster-weekly-support{color:#c00069;font-weight:700}
 .roster-person.roster-detail-only{min-height:16px;padding:0 2px;color:#3b6f9e}.roster-person.roster-detail-only.roster-leave{color:#1756b2}.roster-person.roster-detail-only.roster-support{color:#c00069}
+
+/* 주 담당 입력 중에만 입력칸을 표시합니다. */
+.roster-weekly-input[hidden],.roster-person[hidden],.roster-weekly-empty[hidden]{display:none}
+@media(max-width:760px){.roster-weekly-empty{color:#7593ac}}
