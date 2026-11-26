@@ -46,3 +46,12 @@ test('singgreen support uses the selected time and extra workers have separate w
  const nf=['앤에프직원1','앤에프직원2','앤에프지원'].map(n=>matches(b,7,n)[0]);assert.equal(new Set(nf).size,3);for(const i of nf)assert(i>=12&&i<=14);
  assert(a.model.merges.length>20);assert(b.model.merges.length>400);assert.equal(a.getCell(4,6).value,1);assert.equal(b.getCell(4,7).value,1);
 });
+
+test('exported sheets write Excel worksheet properties in the required order',async()=>{
+ const {makeWorkbook}=require('../monthly-workbook'),JSZip=require('jszip');
+ for(const staff of [[],Array.from({length:20},(_,i)=>({id:i+1,name:'테스트'+i,base:'하림'}))]){
+  const zip=await JSZip.loadAsync(await makeWorkbook(buildMonthlyRoster({month:'2026-12',staff})));
+  const files=Object.keys(zip.files).filter(n=>/^xl\/worksheets\/sheet\d+\.xml$/.test(n));assert.equal(files.length,2);
+  for(const name of files){const xml=await zip.file(name).async('string'),props=xml.match(/<sheetPr(?:\s[^>]*)?>([\s\S]*?)<\/sheetPr>/)?.[1]||'';if(props.includes('<outlinePr')&&props.includes('<pageSetUpPr'))assert(props.indexOf('<outlinePr')<props.indexOf('<pageSetUpPr'),name)}
+ }
+});

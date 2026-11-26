@@ -1,5 +1,5 @@
 'use strict';
-const ExcelJS=require('exceljs'),path=require('node:path');
+const ExcelJS=require('exceljs'),JSZip=require('jszip'),path=require('node:path');
 const template=path.join(__dirname,'templates','blank-roster.xlsx');
 const {shiftRows,compose,color}=require('./public/roster-layout');
 const textColors={normal:'FF20242E',leave:'FFC02636',support:'FF1756B2'};
@@ -54,6 +54,18 @@ async function makeWorkbook(roster){
   for(const workplace of ['하림','싱그린','정다운','중앙축산'])for(const [r,items] of shiftRows(day.places[workplace],workplace)){for(let i=0;i<items.length;i++)setEntries(a.getCell(mapA(r+rowA)+i,colA),[items[i]])}
   for(const workplace of ['동우','앤에프'])for(const [r,items] of shiftRows(day.places[workplace],workplace))items.forEach((item,i)=>setPairedCell(b,mapB(r+rowB)+i,colB,[item]));
  }
- return Buffer.from(await wb.xlsx.writeBuffer());
+ // ExcelJS writes pageSetUpPr before outlinePr, contrary to the OOXML sequence.
+ // Correct the sheet properties without changing cell data, styles, or print settings.
+ const zip=await JSZip.loadAsync(await wb.xlsx.writeBuffer());
+ for(const name of Object.keys(zip.files).filter(n=>/^xl\/worksheets\/sheet\d+\.xml$/.test(n))){
+  const xml=await zip.file(name).async('string');
+  const corrected=xml.replace(/<sheetPr(\s[^>]*)?>([\s\S]*?)<\/sheetPr>/, (all,attrs='',children)=>{
+   const page=children.match(/<pageSetUpPr\b[^>]*\/>/),outline=children.match(/<outlinePr\b[^>]*\/>/);
+   if(!page||!outline||children.indexOf(outline[0])<children.indexOf(page[0]))return all;
+   return '<sheetPr'+attrs+'>'+children.replace(page[0],'').replace(outline[0],outline[0]+page[0])+'</sheetPr>';
+  });
+  zip.file(name,corrected);
+ }
+ return Buffer.from(await zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'}));
 }
 module.exports={makeWorkbook,shiftRows};

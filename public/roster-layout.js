@@ -4,7 +4,7 @@
  const bands={
   '하림':[{start:5,end:5,time:'07:10~16:10'},{start:6,end:16,time:'08:00~17:00'},{start:17,end:18,time:'15:00~24:00'}],
   '싱그린':[{start:19,end:19,time:'08:00~17:00'},{start:20,end:20,time:'10:00~19:00'}],
-  '정다운':[{start:21,end:22,time:'08:00~17:00'}],
+  '정다운':[{start:21,end:21,time:'08:00~17:00'}],
   '중앙축산':[{start:23,end:25,time:'07:00~16:00'}],
   '동우':[{start:5,end:8,time:'08:00~17:00'},{start:9,end:9,time:'09:00~18:00'},{start:10,end:11,time:'22:00~07:00'}],
   '앤에프':[{start:12,end:13,time:'08:00~17:00'}]
@@ -13,7 +13,7 @@
  function shiftRows(entries,workplace){const rows=new Map();const put=(row,e)=>{if(!rows.has(row))rows.set(row,[]);rows.get(row).push(e)};const group=(items,lo,hi)=>{for(const [r,list] of fill(items,lo,hi))for(const e of list)put(r,e)};
   if(workplace==='하림'){const early=entries.filter(e=>!e.annotationOnly&&(e.shift==='조출'||e.shift==='주간'&&Number(e.slot)===1)),night=entries.filter(e=>!e.annotationOnly&&e.shift==='야간').map(e=>({...e,row:16+Number(e.slot||1)})),rest=entries.filter(e=>!early.includes(e)&&!(e.shift==='야간'&&!e.annotationOnly));group(early,5,5);group(rest,6,16);group(night,17,18)}
   else if(workplace==='싱그린'){const early=entries.filter(e=>!e.annotationOnly&&e.shift==='조출'),late=entries.filter(e=>!e.annotationOnly&&e.shift==='후출'),other=entries.filter(e=>!early.includes(e)&&!late.includes(e));group([...early,...other],19,19);group(late,20,20)}
-  else if(workplace==='정다운')group(entries,21,22);else if(workplace==='중앙축산')group(entries,23,25);
+  else if(workplace==='정다운')group(entries,21,21);else if(workplace==='중앙축산')group(entries,23,25);
   else if(workplace==='동우'){const late=entries.filter(e=>!e.annotationOnly&&e.shift==='후출'),night=entries.filter(e=>!e.annotationOnly&&e.shift==='야간').map(e=>({...e,row:9+Number(e.slot||1)})),rest=entries.filter(e=>!late.includes(e)&&!(e.shift==='야간'&&!e.annotationOnly));group(rest,5,8);group(late,9,9);group(night,10,11)}
   else if(workplace==='앤에프')group(entries,12,13);return rows;
  }

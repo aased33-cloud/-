@@ -161,3 +161,17 @@ test('removing holiday support clears both related records in one transaction',a
  assert.equal(Number((await db.query("SELECT count(*) AS n FROM daily_workplace_support WHERE employee_id=1 AND work_date='2026-12-05'")).rows[0].n),0);
  assert.equal(Number((await db.query("SELECT count(*) AS n FROM holiday_plan_assignments WHERE employee_id=1 AND work_date='2026-12-05'")).rows[0].n),0);
  }finally{await db.close()}});
+
+test('weekday workplace swap is atomic and preserves original assignments',async()=>{const {db,app}=await setup();try{
+ await db.exec("UPDATE monthly_workplace_assignments SET workplace='동우' WHERE month='2026-12-01' AND employee_id=2");
+ const body={date:'2026-12-07',employee_id:1,other_employee_id:2,shifts:{}};
+ await request(app).post('/api/workplace-support/swap').set('x-role','employee').send(body).expect(403);
+ await request(app).post('/api/workplace-support/swap').send(body).expect(200);
+ const r=await request(app).get('/api/monthly-roster/preview?month=2026-12').expect(200),d=r.body.days.find(x=>x.date===body.date);
+ assert(d.places['동우'].some(x=>Number(x.employee_id)===1&&x.support&&!x.annotationOnly));assert(d.places['하림'].some(x=>Number(x.employee_id)===2&&x.support&&!x.annotationOnly));
+ assert(d.places['하림'].some(x=>Number(x.employee_id)===1&&x.annotationOnly));assert(d.places['동우'].some(x=>Number(x.employee_id)===2&&x.annotationOnly));
+ const base=await db.query("SELECT workplace FROM monthly_workplace_assignments WHERE month='2026-12-01' ORDER BY employee_id");assert.deepEqual(base.rows.map(x=>x.workplace),['하림','동우','하림']);
+ await request(app).post('/api/workplace-support/swap').send(body).expect(409);
+ assert.equal((await db.query("SELECT count(*)::int AS n FROM daily_workplace_support WHERE work_date='2026-12-07'")).rows[0].n,2);
+ await request(app).post('/api/workplace-support/swap').send({...body,date:'2026-12-05'}).expect(409);
+ }finally{await db.close()}});
