@@ -55,3 +55,15 @@ test('exported sheets write Excel worksheet properties in the required order',as
   for(const name of files){const xml=await zip.file(name).async('string'),props=xml.match(/<sheetPr(?:\s[^>]*)?>([\s\S]*?)<\/sheetPr>/)?.[1]||'';if(props.includes('<outlinePr')&&props.includes('<pageSetUpPr'))assert(props.indexOf('<outlinePr')<props.indexOf('<pageSetUpPr'),name)}
  }
 });
+
+test('roster blue highlight uses four hours of daily attendance without double counting overlaps',()=>{
+ const {hasFourHourAttendance}=require('../public/roster-layout');
+ const time=(start_time,end_time)=>({start_time,end_time});
+ assert.equal(hasFourHourAttendance([time('09:00','12:59')]),false);
+ assert.equal(hasFourHourAttendance([time('09:00','13:00')]),true);
+ assert.equal(hasFourHourAttendance([time('09:00','11:00'),time('13:00','15:00')]),true);
+ assert.equal(hasFourHourAttendance([time('09:00','12:00'),time('11:00','13:00')]),true);
+ assert.equal(hasFourHourAttendance([time('09:00','11:00'),time('10:00','12:00')]),false);
+ assert.equal(hasFourHourAttendance([{start_time:null,end_time:null}]),true);
+ assert.equal(hasFourHourAttendance([]),false);
+});

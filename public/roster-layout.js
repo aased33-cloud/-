@@ -20,6 +20,10 @@
  function duration(a){if(!a.start_time||!a.end_time)return '';const [h1,m1]=a.start_time.split(':').map(Number),[h2,m2]=a.end_time.split(':').map(Number),minutes=h2*60+m2-h1*60-m1;if(!Number.isFinite(minutes)||minutes<=0)return `${a.start_time}~${a.end_time}`;const h=Math.floor(minutes/60),m=minutes%60;return [h?`${h}h`:'',m?`${m}m`:''].filter(Boolean).join(' ')}
  function attendanceText(e){if(Array.isArray(e.attendanceDetails)&&e.attendanceDetails.length)return e.attendanceDetails.map(a=>[a.type,duration(a)].filter(Boolean).join(' ')).join(', ');return e.attendance||''}
  function compose(e){const parts=[];if(e.annotationOnly&&e.destination)parts.push(e.destination);const a=attendanceText(e);if(a)parts.push(a);return e.name+(parts.length?'('+parts.join(', ')+')':'')}
+ function hasFourHourAttendance(details){
+  const intervals=[];for(const a of details||[]){if(!a.start_time&&!a.end_time)return true;if(!a.start_time||!a.end_time)continue;const [sh,sm]=a.start_time.split(':').map(Number),[eh,em]=a.end_time.split(':').map(Number),start=sh*60+sm,end=eh*60+em;if(Number.isFinite(start)&&Number.isFinite(end)&&start>=0&&end<=1440&&start<end)intervals.push([start,end])}
+  intervals.sort((a,b)=>a[0]-b[0]);let total=0,start=null,end=null;for(const [a,b] of intervals){if(start===null){start=a;end=b}else if(a<=end)end=Math.max(end,b);else{total+=end-start;start=a;end=b}}if(start!==null)total+=end-start;return total>=240;
+ }
  function color(e){return attendanceText(e)?'leave':e.support||e.annotationOnly?'support':'normal'}
- return {groups,bands,shiftRows,duration,attendanceText,compose,color};
+ return {groups,bands,shiftRows,duration,attendanceText,compose,color,hasFourHourAttendance};
 });

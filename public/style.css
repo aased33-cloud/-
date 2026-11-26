@@ -73,7 +73,7 @@ body{background:#f5f4fb;color:#24233c;font-size:16px}.top{background:#faf9fe;bor
 .roster-week-table tbody tr.roster-work-5>*{background:#eaf8f6}
 .roster-week-table tbody tr>td.roster-outside{background:#f1f2f4}
 
-/* 근무표 표시색: 5시간 이상 근태는 파랑, 지원은 핫핑크 */
+/* 근무표 표시색: 근태 합계 4시간 이상은 파랑, 지원은 핫핑크 */
 .roster-dot-leave{background:#1756b2}.roster-dot-support{background:#c00069}
 .roster-person.roster-leave{color:#1756b2;font-weight:700}.roster-person.roster-support{color:#c00069;font-weight:700}
 
